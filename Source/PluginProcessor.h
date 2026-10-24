@@ -11,7 +11,9 @@
 class SolIntentProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
-    static constexpr int numLayers = 2;
+    static constexpr int numLayers = 4;
+    static juce::String layerLetter (int i) { return juce::String::charToString ((juce::juce_wchar) ('A' + i)); }
+    static juce::String layerParam (int i, const char* what) { return juce::String::charToString ((juce::juce_wchar) ('a' + i)) + what; }
 
     SolIntentProcessor();
     ~SolIntentProcessor() override;
@@ -110,7 +112,7 @@ private:
     {
         std::atomic<float> *volume, *tune, *fine, *attack, *decay, *sustain, *release, *letRing, *velSens, *bend,
                            *tone, *width, *revMix, *revSize, *lfoRate, *lfoDepth, *lfoTarget, *keyswitch;
-        std::atomic<float> *on[2], *vol[2], *tun[2], *pan[2];
+        std::atomic<float> *on[numLayers], *vol[numLayers], *tun[numLayers], *pan[numLayers];
     } P;
 
     std::array<Layer, numLayers> layers;

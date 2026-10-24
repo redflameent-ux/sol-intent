@@ -225,7 +225,7 @@ private:
                      playTab { "PLAY" }, mapTab { "MAP" }, newButton { "+ New instrument" },
                      octDown { "-" }, octUp { "+" };
     juce::ListBox browser { "Instruments", this };
-    LayerCard cardA { proc, 0 }, cardB { proc, 1 };
+    std::array<std::unique_ptr<LayerCard>, SolIntentProcessor::numLayers> cards;
     ResonanceView resonance { proc };
     PadGrid pads { proc };
     MapView mapView { proc };

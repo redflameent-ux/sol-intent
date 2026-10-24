@@ -318,6 +318,20 @@ int main (int argc, char** argv)
         for (int i = 0; i < 2000; ++i) diff = jmax (diff, std::abs (capture.getSample (0, i) - zA->audio.getSample (0, i)));
         CHECK (diff > 0.01f, "with layer B on, both layers sound together");
         p.params.getParameter ("bOn")->setValueNotifyingHost (0.0f);
+
+        // layers C and D join in too
+        p.loadNow (2, p.getInstrumentList()[(size_t) iDrum]);
+        p.loadNow (3, p.getInstrumentList()[0]);
+        p.params.getParameter ("cOn")->setValueNotifyingHost (1.0f);
+        p.params.getParameter ("dOn")->setValueNotifyingHost (1.0f);
+        p.params.getParameter ("dPan")->setValueNotifyingHost (1.0f);   // hard right
+        render (p, out, m, 2, bs);
+        m.addEvent (MidiMessage::noteOn (1, 60, (uint8) 100), 0);
+        render (p, out, m, 4, bs);
+        CHECK (out.getMagnitude (0, bs) > 0.001f && out.getMagnitude (1, bs) > out.getMagnitude (0, bs) * 0.5f, "four layers play together");
+        for (auto id : { "cOn", "dOn" }) p.params.getParameter (id)->setValueNotifyingHost (0.0f);
+        p.params.getParameter ("dPan")->setValueNotifyingHost (0.5f);
+        p.stopAllSound(); render (p, out, m, 2, bs);
         p.stopAllSound(); render (p, out, m, 2, bs);
 
         // MIDI learn: CC 21 -> Space

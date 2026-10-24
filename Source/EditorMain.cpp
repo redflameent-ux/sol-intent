@@ -58,10 +58,12 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     octDown.onClick = [this] { proc.padBaseNote = jmax (0, proc.padBaseNote - 12); pads.repaint(); };
     octUp.onClick   = [this] { proc.padBaseNote = jmin (112, proc.padBaseNote + 12); pads.repaint(); };
 
-    cardA.onActivate = [this] { setActiveLayer (0); };
-    cardB.onActivate = [this] { setActiveLayer (1); };
-    addAndMakeVisible (cardA);
-    addAndMakeVisible (cardB);
+    for (int i = 0; i < SolIntentProcessor::numLayers; ++i)
+    {
+        cards[(size_t) i] = std::make_unique<LayerCard> (proc, i);
+        cards[(size_t) i]->onActivate = [this, i] { setActiveLayer (i); };
+        addAndMakeVisible (*cards[(size_t) i]);
+    }
 
     browser.setRowHeight (26);
     addAndMakeVisible (browser);
@@ -253,10 +255,12 @@ void SolIntentEditor::resized()
     leftArea = area.removeFromLeft (262);
     area.removeFromLeft (12);
     auto left = leftArea;
-    cardA.setBounds (left.removeFromTop (104));
-    left.removeFromTop (8);
-    cardB.setBounds (left.removeFromTop (104));
-    left.removeFromTop (10);
+    for (auto& card : cards)
+    {
+        card->setBounds (left.removeFromTop (76));
+        left.removeFromTop (6);
+    }
+    left.removeFromTop (4);
     browserArea = left;
     auto br = browserArea.reduced (8);
     br.removeFromTop (24);
@@ -343,7 +347,7 @@ void SolIntentEditor::showMap (bool on)
 void SolIntentEditor::setActiveLayer (int i)
 {
     proc.activeLayer = i;
-    cardA.repaint(); cardB.repaint();
+    for (auto& card : cards) card->repaint();
     browser.repaint();
     shownLayer = -1;   // forces a refresh
     if (mapMode) mapView.setTarget (proc.getLayerInfo (i), proc.getArticulation (i));
@@ -452,7 +456,12 @@ void SolIntentEditor::paintListBoxItem (int row, Graphics& g, int w, int h, bool
     }
     const auto& info = proc.getInstrumentList()[(size_t) r.index];
     const bool inActive = proc.getLayerInfo (proc.activeLayer).folder == info.folder && proc.getLayerInfo (proc.activeLayer).name == info.name;
-    const bool inOther  = proc.getLayerInfo (1 - proc.activeLayer).folder == info.folder && proc.getLayerInfo (1 - proc.activeLayer).name == info.name;
+    String others;   // letters of the other layers using this instrument
+    for (int k = 0; k < SolIntentProcessor::numLayers; ++k)
+        if (k != proc.activeLayer && proc.getDisplayInstrument (k) != nullptr
+            && proc.getLayerInfo (k).folder == info.folder && proc.getLayerInfo (k).name == info.name)
+            others << SolIntentProcessor::layerLetter (k);
+    const bool inOther = others.isNotEmpty();
     if (inActive)
     {
         g.setColour (ui::panelHi);
@@ -467,7 +476,7 @@ void SolIntentEditor::paintListBoxItem (int row, Graphics& g, int w, int h, bool
     {
         g.setColour (ui::textDim);
         g.setFont (FontOptions (10.0f, Font::bold));
-        g.drawText (proc.activeLayer == 0 ? "B" : "A", w - 26, 0, 20, h, Justification::centred);
+        g.drawText (others, w - 40, 0, 34, h, Justification::centredRight);
     }
 }
 
@@ -476,7 +485,7 @@ void SolIntentEditor::listBoxItemClicked (int row, const MouseEvent&)
     if (row >= 0 && row < (int) rows.size() && ! rows[(size_t) row].header)
     {
         proc.selectInstrument (proc.activeLayer, rows[(size_t) row].index);
-        if (proc.activeLayer == 1) proc.params.getParameter ("bOn")->setValueNotifyingHost (1.0f);
+        proc.params.getParameter (SolIntentProcessor::layerParam (proc.activeLayer, "On"))->setValueNotifyingHost (1.0f);
         browser.repaint();
         if (mapMode) mapView.setTarget (proc.getLayerInfo (proc.activeLayer), 0);
     }
@@ -505,7 +514,7 @@ void SolIntentEditor::newInstrument (std::function<void (File)> then)
         if (name.isEmpty()) return;
         auto folder = sol::Library::createInstrument (name);
         proc.loadFolderIntoLayer (proc.activeLayer, folder);
-        if (proc.activeLayer == 1) proc.params.getParameter ("bOn")->setValueNotifyingHost (1.0f);
+        proc.params.getParameter (SolIntentProcessor::layerParam (proc.activeLayer, "On"))->setValueNotifyingHost (1.0f);
         refreshList();
         showMap (true);
         mapView.setTarget (proc.getLayerInfo (proc.activeLayer), 0);
@@ -599,8 +608,7 @@ void SolIntentEditor::savePresetAs()
 void SolIntentEditor::timerCallback()
 {
     refreshInstrumentViews();
-    cardA.refresh();
-    cardB.refresh();
+    for (auto& card : cards) card->refresh();
 
     if (proc.currentPresetName != shownPreset)
     {

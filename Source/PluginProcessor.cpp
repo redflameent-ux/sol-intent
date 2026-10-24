@@ -16,8 +16,13 @@ SolIntentProcessor::SolIntentProcessor()
     P.letRing = g ("letRing"); P.velSens = g ("velSens"); P.bend = g ("bendRange");
     P.tone = g ("tone"); P.width = g ("width"); P.revMix = g ("reverbMix"); P.revSize = g ("reverbSize");
     P.lfoRate = g ("lfoRate"); P.lfoDepth = g ("lfoDepth"); P.lfoTarget = g ("lfoTarget"); P.keyswitch = g ("keyswitch");
-    P.on[0] = g ("aOn"); P.vol[0] = g ("aVol"); P.tun[0] = g ("aTune"); P.pan[0] = g ("aPan");
-    P.on[1] = g ("bOn"); P.vol[1] = g ("bVol"); P.tun[1] = g ("bTune"); P.pan[1] = g ("bPan");
+    for (int i = 0; i < numLayers; ++i)
+    {
+        P.on[i]  = params.getRawParameterValue (layerParam (i, "On"));
+        P.vol[i] = params.getRawParameterValue (layerParam (i, "Vol"));
+        P.tun[i] = params.getRawParameterValue (layerParam (i, "Tune"));
+        P.pan[i] = params.getRawParameterValue (layerParam (i, "Pan"));
+    }
 
     for (auto& l : layers)
     {
@@ -85,14 +90,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout SolIntentProcessor::createLa
     add (std::make_unique<AudioParameterChoice> (ParameterID { "keyswitch", 1 }, "Keyswitch", StringArray { "Off", "C-1", "C0", "C1", "C6" }, 2));
 
     // layers
-    add (std::make_unique<AudioParameterBool>  (ParameterID { "aOn", 1 }, "Layer A On", true));
-    add (std::make_unique<AudioParameterFloat> (ParameterID { "aVol", 1 }, "A Level", NormalisableRange<float> (-36.0f, 6.0f, 0.1f), 0.0f, db));
-    add (std::make_unique<AudioParameterInt>   (ParameterID { "aTune", 1 }, "A Tune", -24, 24, 0, st));
-    add (std::make_unique<AudioParameterFloat> (ParameterID { "aPan", 1 }, "A Pan", NormalisableRange<float> (-1.0f, 1.0f), 0.0f, panTxt));
-    add (std::make_unique<AudioParameterBool>  (ParameterID { "bOn", 1 }, "Layer B On", false));
-    add (std::make_unique<AudioParameterFloat> (ParameterID { "bVol", 1 }, "B Level", NormalisableRange<float> (-36.0f, 6.0f, 0.1f), 0.0f, db));
-    add (std::make_unique<AudioParameterInt>   (ParameterID { "bTune", 1 }, "B Tune", -24, 24, 0, st));
-    add (std::make_unique<AudioParameterFloat> (ParameterID { "bPan", 1 }, "B Pan", NormalisableRange<float> (-1.0f, 1.0f), 0.0f, panTxt));
+    // layers A-D (ids aOn, aVol ... dPan)
+    for (int i = 0; i < numLayers; ++i)
+    {
+        auto L = layerLetter (i);
+        add (std::make_unique<AudioParameterBool>  (ParameterID { layerParam (i, "On"), 1 }, "Layer " + L + " On", i == 0));
+        add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Vol"), 1 }, L + " Level", NormalisableRange<float> (-36.0f, 6.0f, 0.1f), 0.0f, db));
+        add (std::make_unique<AudioParameterInt>   (ParameterID { layerParam (i, "Tune"), 1 }, L + " Tune", -24, 24, 0, st));
+        add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Pan"), 1 }, L + " Pan", NormalisableRange<float> (-1.0f, 1.0f), 0.0f, panTxt));
+    }
     return l;
 }
 

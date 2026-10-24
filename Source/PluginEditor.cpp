@@ -416,12 +416,12 @@ void TintedKeyboard::drawBlackNote (int n, Graphics& g, Rectangle<float> area, b
 // ============================================================================ layer card
 LayerCard::LayerCard (SolIntentProcessor& p, int i)
     : proc (p), index (i),
-      level (p, i == 0 ? "aVol" : "bVol", "Level", false, true),
-      tune  (p, i == 0 ? "aTune" : "bTune", "Tune", true, true),
-      pan   (p, i == 0 ? "aPan" : "bPan", "Pan", true, true)
+      level (p, SolIntentProcessor::layerParam (i, "Vol"), "Level", false, true),
+      tune  (p, SolIntentProcessor::layerParam (i, "Tune"), "Tune", true, true),
+      pan   (p, SolIntentProcessor::layerParam (i, "Pan"), "Pan", true, true)
 {
     onButton.setTooltip ("Turn this layer on or off");
-    onAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (proc.params, i == 0 ? "aOn" : "bOn", onButton);
+    onAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (proc.params, SolIntentProcessor::layerParam (i, "On"), onButton);
     addAndMakeVisible (onButton);
     addAndMakeVisible (level);
     addAndMakeVisible (tune);
@@ -431,7 +431,7 @@ LayerCard::LayerCard (SolIntentProcessor& p, int i)
 void LayerCard::refresh()
 {
     auto inst = proc.getDisplayInstrument (index);
-    auto newName = inst != nullptr ? inst->name : (index == 1 ? String ("Empty - pick an instrument") : String ("..."));
+    auto newName = inst != nullptr ? inst->name : (index > 0 ? String ("Empty") : String ("..."));
     String newArt;
     if (inst != nullptr)
         if (auto* a = inst->get (proc.getArticulation (index))) newArt = a->name;
@@ -449,24 +449,29 @@ void LayerCard::paint (Graphics& g)
     g.setColour (active ? ui::gold : ui::line.brighter (0.1f));
     g.drawRoundedRectangle (r, 8.0f, active ? 1.4f : 1.0f);
 
-    auto badge = Rectangle<float> (10, 10, 22, 22);
+    auto badge = Rectangle<float> (8, 8, 20, 20);
     g.setColour (on ? ui::gold : ui::textDim);
     g.drawEllipse (badge, 1.2f);
-    g.setFont (FontOptions (12.0f, Font::bold));
-    g.drawText (index == 0 ? "A" : "B", badge, Justification::centred);
+    g.setFont (FontOptions (11.0f, Font::bold));
+    g.drawText (SolIntentProcessor::layerLetter (index), badge, Justification::centred);
 
     g.setColour (on ? ui::text : ui::textDim);
     g.setFont (FontOptions (13.0f, Font::bold));
-    g.drawFittedText (name, 40, 8, getWidth() - 90, 16, Justification::centredLeft, 1);
+    g.drawFittedText (name, 34, 7, getWidth() - 84, 18, Justification::centredLeft, 1);
     g.setColour (ui::textDim);
     g.setFont (FontOptions (11.0f));
-    g.drawText (articulation, 40, 23, getWidth() - 90, 14, Justification::centredLeft);
+    g.drawFittedText (articulation, 34, 30, getWidth() - 34 - 150, 14, Justification::centredLeft, 1);
+    if (! on && proc.getDisplayInstrument (index) != nullptr)
+    {
+        g.setFont (FontOptions (10.0f));
+        g.drawText ("off", 34, 46, 60, 12, Justification::centredLeft);
+    }
 }
 
 void LayerCard::resized()
 {
-    onButton.setBounds (getWidth() - 46, 10, 38, 22);
-    auto knobsRow = getLocalBounds().withTrimmedTop (40).reduced (8, 2);
+    onButton.setBounds (getWidth() - 44, 6, 36, 20);
+    auto knobsRow = getLocalBounds().withTrimmedTop (27).withTrimmedBottom (3).removeFromRight (148).reduced (4, 0);
     const int w = knobsRow.getWidth() / 3;
     level.setBounds (knobsRow.removeFromLeft (w));
     tune.setBounds (knobsRow.removeFromLeft (w));
