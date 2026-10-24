@@ -95,6 +95,8 @@ namespace Library
     void setLibraryFolder (const juce::File&);
     void ensureLibraryExists (const juce::File&);
     juce::File presetFolder();
+    juce::String getSetting (const juce::String& key);               // small per-computer settings
+    void setSetting (const juce::String& key, const juce::String& value);
 
     std::vector<InstrumentInfo> scan (const juce::File& root);
 

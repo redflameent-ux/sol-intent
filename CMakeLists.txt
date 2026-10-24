@@ -25,7 +25,8 @@ set(SOL_SOURCES
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/MapView.cpp
-    Source/EditorMain.cpp)
+    Source/EditorMain.cpp
+    Source/Panels.cpp)
 
 set(SOL_DEFS
     JUCE_WEB_BROWSER=0

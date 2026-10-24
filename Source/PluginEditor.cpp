@@ -80,7 +80,8 @@ void ui::Look::drawRotarySlider (Graphics& g, int x, int y, int w, int h, float 
     const float to = start + pos * (end - start);
     Path val;
     val.addCentredArc (c.x, c.y, r - stroke, r - stroke, 0.0f, jmin (from, to), jmax (from, to), true);
-    auto arcCol = learning ? violet : s.isEnabled() ? teal : teal.withAlpha (0.4f);
+    const bool linked = s.getProperties()["linked"];
+    auto arcCol = learning ? violet : linked ? violet.brighter (0.2f) : s.isEnabled() ? teal : teal.withAlpha (0.4f);
     g.setColour (arcCol.withAlpha (0.18f));
     g.strokePath (val, PathStrokeType (stroke * 3.0f, PathStrokeType::curved, PathStrokeType::rounded));
     g.setColour (arcCol);
@@ -149,7 +150,7 @@ void ui::Look::drawComboBox (Graphics& g, int w, int h, bool, int, int, int, int
 
 // ============================================================================ knob
 ParamKnob::ParamKnob (SolIntentProcessor& p, const String& id, const String& text, bool bipolar, bool isSmall)
-    : proc (p), paramID (id), baseLabel (text), small (isSmall)
+    : proc (p), baseLabel (text), small (isSmall)
 {
     slider.setSliderStyle (Slider::RotaryHorizontalVerticalDrag);
     slider.setTextBoxStyle (small ? Slider::NoTextBox : Slider::TextBoxBelow, false, 74, 15);
@@ -158,33 +159,102 @@ ParamKnob::ParamKnob (SolIntentProcessor& p, const String& id, const String& tex
     slider.setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
     slider.setColour (Slider::textBoxBackgroundColourId, Colours::transparentBlack);
     slider.setColour (Slider::textBoxTextColourId, ui::textDim.brighter (0.4f));
-    att = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.params, id, slider);
-    slider.setDoubleClickReturnValue (true, proc.params.getParameterRange (id).convertFrom0to1 (proc.params.getParameter (id)->getDefaultValue()));
-    slider.setTooltip ("Drag to change. Double-click to reset. Right-click to link it to a knob or fader on your MIDI controller.");
-    slider.onRightClick = [this]
-    {
-        PopupMenu m;
-        int cc = proc.getLearnedCC (paramID);
-        m.addSectionHeader (baseLabel);
-        m.addItem (1, "Learn MIDI control (then move a knob or fader)");
-        if (cc >= 0) m.addItem (2, "Forget MIDI control (CC " + String (cc) + ")");
-        m.addItem (3, "Reset to default");
-        m.showMenuAsync (PopupMenu::Options().withTargetComponent (&slider), [this] (int r)
-        {
-            if (r == 1) proc.startLearning (paramID);
-            if (r == 2) proc.forgetLearning (paramID);
-            if (r == 3) if (auto* prm = proc.params.getParameter (paramID)) prm->setValueNotifyingHost (prm->getDefaultValue());
-            refreshLearnState();
-        });
-    };
+    slider.onRightClick = [this] { showMenu(); };
     addAndMakeVisible (slider);
 
-    label.setText (text.toUpperCase(), dontSendNotification);
     label.setJustificationType (Justification::centred);
     label.setFont (FontOptions (small ? 9.5f : 10.5f));
     label.setColour (Label::textColourId, ui::goldDim.brighter (0.4f));
     label.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (label);
+    setParam (id, text);
+}
+
+void ParamKnob::setParam (const String& id, const String& text)
+{
+    if (id == paramID && text == baseLabel && att != nullptr) return;
+    att.reset();
+    paramID = id;
+    baseLabel = text;
+    att = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.params, id, slider);
+    slider.setDoubleClickReturnValue (true, proc.params.getParameterRange (id).convertFrom0to1 (proc.params.getParameter (id)->getDefaultValue()));
+    const bool isMacro = id.startsWith ("macro");
+    slider.setTooltip (isMacro ? "A macro moves every knob linked to it. Right-click any other knob to link it here; right-click this one to rename it."
+                               : "Drag to change. Double-click to reset. Right-click to link it to your MIDI controller or a macro.");
+    label.setText (text.toUpperCase(), dontSendNotification);
+    shownLabel.clear();
+    refreshLearnState();
+}
+
+void ParamKnob::showMenu()
+{
+    const bool isMacro = paramID.startsWith ("macro");
+    const int macroIndex = isMacro ? paramID.getTrailingIntValue() - 1 : -1;
+    PopupMenu m;
+    int cc = proc.getLearnedCC (paramID);
+    m.addSectionHeader (isMacro ? proc.getMacroName (macroIndex) : baseLabel);
+    m.addItem (1, "Learn MIDI control (then move a knob or fader)");
+    if (cc >= 0) m.addItem (2, "Forget MIDI control (CC " + String (cc) + ")");
+
+    if (isMacro)
+    {
+        m.addSeparator();
+        m.addItem (20, "Rename...");
+        auto links = proc.getMacroLinks (macroIndex);
+        PopupMenu linked;
+        for (auto& l : links)
+            if (auto* prm = proc.params.getParameter (l.paramID))
+                linked.addItem (-1, prm->getName (40), false);
+        if (links.empty()) linked.addItem (-1, "Nothing yet - right-click a knob and pick Link to macro", false);
+        m.addSubMenu ("Linked knobs (" + String ((int) links.size()) + ")", linked);
+        m.addItem (21, "Unlink everything", ! links.empty());
+    }
+    else
+    {
+        m.addSeparator();
+        const int current = proc.getMacroFor (paramID);
+        PopupMenu link;
+        for (int k = 0; k < SolIntentProcessor::numMacros; ++k)
+            link.addItem (10 + k, proc.getMacroName (k), true, current == k);
+        m.addSubMenu ("Link to macro", link);
+        if (current >= 0)
+        {
+            m.addItem (30, proc.getMacroName (current) + " ends here (turn the macro up to reach this setting)");
+            m.addItem (31, "Unlink from " + proc.getMacroName (current));
+        }
+    }
+    m.addSeparator();
+    m.addItem (3, "Reset to default");
+
+    m.showMenuAsync (PopupMenu::Options().withTargetComponent (&slider), [this, macroIndex] (int r)
+    {
+        if (r == 1) proc.startLearning (paramID);
+        if (r == 2) proc.forgetLearning (paramID);
+        if (r == 3) if (auto* prm = proc.params.getParameter (paramID)) prm->setValueNotifyingHost (prm->getDefaultValue());
+        if (r >= 10 && r < 10 + SolIntentProcessor::numMacros)
+        {
+            proc.linkToMacro (r - 10, paramID);
+            proc.setStatus ("Linked " + baseLabel + " to " + proc.getMacroName (r - 10)
+                            + ". Now set this knob where the macro should take it, right-click it and choose \"ends here\".");
+        }
+        if (r == 30) { int k = proc.getMacroFor (paramID); proc.setMacroEnd (k, paramID); proc.setStatus ("Set where " + proc.getMacroName (k) + " takes " + baseLabel + "."); }
+        if (r == 31) proc.unlinkFromMacro (paramID);
+        if (r == 21) proc.clearMacro (macroIndex);
+        if (r == 20)
+        {
+            auto* top = findParentComponentOfClass<AudioProcessorEditor>();
+            auto* w = new AlertWindow ("Rename macro", {}, MessageBoxIconType::NoIcon);
+            w->addTextEditor ("name", proc.getMacroName (macroIndex));
+            w->addButton ("OK", 1, KeyPress (KeyPress::returnKey));
+            w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+            if (top != nullptr) { top->addAndMakeVisible (w); w->centreAroundComponent (top, w->getWidth(), w->getHeight()); }
+            w->enterModalState (true, ModalCallbackFunction::create ([this, w, macroIndex] (int res)
+            {
+                if (res == 1) proc.setMacroName (macroIndex, w->getTextEditorContents ("name"));
+            }), true);
+        }
+        refreshLearnState();
+    });
 }
 
 void ParamKnob::resized()
@@ -205,15 +275,31 @@ void ParamKnob::resized()
 void ParamKnob::refreshLearnState()
 {
     const bool learning = proc.getLearningParam() == paramID;
-    if ((bool) slider.getProperties()["learning"] != learning)
+    const bool isMacro = paramID.startsWith ("macro");
+    const int macro = isMacro ? -1 : proc.getMacroFor (paramID);
+    if ((bool) slider.getProperties()["learning"] != learning || (bool) slider.getProperties()["linked"] != (macro >= 0))
     {
         slider.getProperties().set ("learning", learning);
+        slider.getProperties().set ("linked", macro >= 0);
         slider.repaint();
     }
     int cc = proc.getLearnedCC (paramID);
-    auto t = learning ? String ("MOVE A CONTROL") : baseLabel.toUpperCase() + (cc >= 0 && ! small ? "  CC" + String (cc) : String());
-    label.setText (t, dontSendNotification);
-    label.setColour (Label::textColourId, learning ? ui::violet : cc >= 0 ? ui::teal : ui::goldDim.brighter (0.4f));
+    String t;
+    if (learning)          t = "MOVE A CONTROL";
+    else if (isMacro)      t = proc.getMacroName (paramID.getTrailingIntValue() - 1).toUpperCase();
+    else                   t = baseLabel.toUpperCase();
+    if (! learning && ! small)
+    {
+        if (macro >= 0) t << "  M" << (macro + 1);
+        else if (cc >= 0) t << "  CC" << cc;
+    }
+    if (t != shownLabel)
+    {
+        shownLabel = t;
+        label.setText (t, dontSendNotification);
+    }
+    label.setColour (Label::textColourId, learning ? ui::violet : macro >= 0 ? ui::violet.brighter (0.3f)
+                                                   : cc >= 0 ? ui::teal : isMacro ? ui::gold : ui::goldDim.brighter (0.4f));
 }
 
 // ============================================================================ ripple display
@@ -442,8 +528,14 @@ void LayerCard::refresh()
     auto inst = proc.getDisplayInstrument (index);
     auto newName = inst != nullptr ? inst->name : (index > 0 ? String ("Empty") : String ("..."));
     String newArt;
-    if (inst != nullptr)
+    if (inst != nullptr && inst->name != "Empty")
+    {
         if (auto* a = inst->get (proc.getArticulation (index))) newArt = a->name;
+        auto value = [this] (const char* what) { return proc.params.getRawParameterValue (SolIntentProcessor::layerParam (index, what))->load(); };
+        const int lo = (int) value ("KeyLo"), hi = (int) value ("KeyHi");
+        if (lo > 0 || hi < 127) newArt << (newArt.isEmpty() ? "" : "  ") << sol::noteName (jmin (lo, hi)) << "-" << sol::noteName (jmax (lo, hi));
+        if (value ("Ring") < 0.5f) newArt << (newArt.isEmpty() ? "" : "  ") << "held";
+    }
     if (newName != name || newArt != articulation) { name = newName; articulation = newArt; repaint(); }
     level.refreshLearnState(); tune.refreshLearnState(); pan.refreshLearnState();
 }

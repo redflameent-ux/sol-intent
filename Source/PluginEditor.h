@@ -42,6 +42,7 @@ public:
     ParamKnob (SolIntentProcessor&, const juce::String& paramID, const juce::String& label, bool bipolar, bool small = false);
     void resized() override;
     void refreshLearnState();
+    void setParam (const juce::String& paramID, const juce::String& label);   // point the knob at another setting
     juce::String getParamID() const { return paramID; }
 
 private:
@@ -55,8 +56,9 @@ private:
         }
     };
 
+    void showMenu();
     SolIntentProcessor& proc;
-    juce::String paramID, baseLabel;
+    juce::String paramID, baseLabel, shownLabel;
     bool small;
     LearnSlider slider;
     juce::Label label;
@@ -74,6 +76,40 @@ public:
 private:
     SolIntentProcessor& proc;
     float phase = 0.0f;
+};
+
+// ---------------------------------------------------------------------------- XY morph pad
+class MorphPad : public juce::Component
+{
+public:
+    explicit MorphPad (SolIntentProcessor&);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+private:
+    juce::Rectangle<float> padArea() const;
+    void moveTo (juce::Point<float>);
+    SolIntentProcessor& proc;
+    juce::ToggleButton onButton;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> onAtt;
+    bool dragging = false;
+};
+
+// ---------------------------------------------------------------------------- effects rack
+class FxView : public juce::Component
+{
+public:
+    explicit FxView (SolIntentProcessor&);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void refresh();
+private:
+    struct Module { juce::String title, blurb; std::vector<ParamKnob*> knobs; juce::Rectangle<int> area; };
+    SolIntentProcessor& proc;
+    juce::OwnedArray<ParamKnob> knobs;
+    std::vector<Module> modules;
 };
 
 // ---------------------------------------------------------------------------- 4x4 pads
@@ -226,13 +262,15 @@ private:
 
     juce::TextButton libraryButton { "Library..." }, rescanButton { "Rescan" }, stopButton { "Stop all" },
                      presetButton, prevPreset { "<" }, nextPreset { ">" }, savePreset { "Save" },
-                     playTab { "PLAY" }, mapTab { "MAP" }, newButton { "+ New instrument" },
+                     playTab { "PLAY" }, mapTab { "MAP" }, fxTab { "FX" }, newButton { "+ New instrument" },
                      octDown { "-" }, octUp { "+" };
     juce::ListBox browser { "Instruments", this };
     std::array<std::unique_ptr<LayerCard>, SolIntentProcessor::numLayers> cards;
     ResonanceView resonance { proc };
     PadGrid pads { proc };
     MapView mapView { proc };
+    FxView fxView { proc };
+    MorphPad morph { proc };
     TintedKeyboard keyboard { proc.keyboardState };
     juce::Label statusLabel, padRangeLabel;
     juce::OwnedArray<juce::TextButton> artButtons;
@@ -240,17 +278,23 @@ private:
     juce::OwnedArray<ParamKnob> knobs;
     juce::ToggleButton letRing { "Let ring" };
     juce::ComboBox lfoTarget, keyswitch;
-    juce::Label lfoTargetL, keyswitchL;
+    juce::Label lfoTargetL, keyswitchL, zoneL;
+    juce::Slider zoneLo, zoneHi;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> letRingAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> zoneLoAtt, zoneHiAtt;
+    int controlsLayer = -1;
+    void pointLayerControlsAt (int layer);
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoTargetAtt, keyswitchAtt;
 
     sol::InstrumentPtr shown[SolIntentProcessor::numLayers];
     int shownArt = -1, shownLayer = -1, shownKs = -2;
     juce::String shownPreset;
     bool mapMode = false, dragging = false;
+    int view = 0;   // 0 play, 1 map, 2 fx
+    void showView (int);
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Rectangle<int> knobArea, leftArea, centreArea, browserArea;
-    juce::Rectangle<int> sectionEnv, sectionMotion, sectionSound;
+    juce::Rectangle<int> sectionEnv, sectionMotion, sectionSound, sectionMacros;
     juce::Image starField;   // painted once per size
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SolIntentEditor)

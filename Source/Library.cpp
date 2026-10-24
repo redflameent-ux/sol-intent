@@ -71,6 +71,15 @@ juce::File Library::presetFolder()
     return f;
 }
 
+juce::String Library::getSetting (const juce::String& key) { return openSettings()->getValue (key); }
+
+void Library::setSetting (const juce::String& key, const juce::String& value)
+{
+    auto s = openSettings();
+    s->setValue (key, value);
+    s->saveIfNeeded();
+}
+
 juce::File Library::getLibraryFolder()
 {
     auto s = openSettings();

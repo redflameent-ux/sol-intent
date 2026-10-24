@@ -79,6 +79,10 @@ static int snapshot (const File& png)
     MessageManager::getInstance()->runDispatchLoopUntil (500);
     if (auto* lb = ed->findChildWithID ("x")) (void) lb;
     save (png.getSiblingFile ("ui_map.png"));
+    for (auto* c : ed->getChildren())
+        if (auto* b = dynamic_cast<TextButton*> (c); b != nullptr && b->getButtonText() == "FX") b->triggerClick();
+    MessageManager::getInstance()->runDispatchLoopUntil (300);
+    save (png.getSiblingFile ("ui_fx.png"));
     return 0;
 }
 
@@ -191,14 +195,14 @@ int main (int argc, char** argv)
     CHECK (out.getMagnitude (0, bs) > 0.01f, "let ring keeps sounding after key up");
 
     // Turn let ring off: next released note fades out.
-    p.params.getParameter ("letRing")->setValueNotifyingHost (0.0f);
-    p.params.getParameter ("release")->setValueNotifyingHost (0.0f);   // shortest
+    p.params.getParameter ("aRing")->setValueNotifyingHost (0.0f);
+    p.params.getParameter ("aRel")->setValueNotifyingHost (0.0f);   // shortest
     m.addEvent (MidiMessage::noteOn (1, 64, (uint8) 100), 0);
     render (p, out, m, 4, bs);
     m.addEvent (MidiMessage::noteOff (1, 64), 0);
     render (p, out, m, 20, bs);
     CHECK (out.getMagnitude (0, bs) < 0.001f, "with let ring off, notes stop after release");
-    p.params.getParameter ("letRing")->setValueNotifyingHost (1.0f);
+    p.params.getParameter ("aRing")->setValueNotifyingHost (1.0f);
 
     // Pitch bend: full up with 12 st range should double the frequency of C3.
     p.stopAllSound();
@@ -286,7 +290,7 @@ int main (int argc, char** argv)
                "subfolders become articulations Main / Rim / Roll");
 
         p.params.getParameter ("reverbMix")->setValueNotifyingHost (0.0f);
-        p.params.getParameter ("letRing")->setValueNotifyingHost (1.0f);
+        p.params.getParameter ("aRing")->setValueNotifyingHost (1.0f);
         p.loadNow (0, p.getInstrumentList()[(size_t) iDrum]);
         m.addEvent (MidiMessage::pitchWheel (1, 8192), 0);
         render (p, out, m, 2, bs);
@@ -380,6 +384,132 @@ int main (int argc, char** argv)
         CHECK (made.moveToTrash() || ! made.exists(), "instrument folder can be moved to the Trash");
        #endif
         made.deleteRecursively();
+    }
+
+    std::cout << "Cody's list: layer zones, envelopes, macros, morph, effects, saving\n";
+    {
+        auto setP = [&p] (const char* id, float plain)
+        {
+            auto* prm = p.params.getParameter (id);
+            prm->setValueNotifyingHost (p.params.getParameterRange (id).convertTo0to1 (plain));
+        };
+        p.stopAllSound(); render (p, out, m, 2, bs);
+        p.rescanLibrary();
+        auto byFolder = [&p] (const File& f) { return p.getInstrumentList()[(size_t) jmax (0, p.findInList (f))]; };
+        p.loadNow (0, byFolder (root.getChildFile ("Test Bowls")));
+        p.loadNow (1, byFolder (root.getChildFile ("Koshi Chimes/Koshi Terra")));
+        p.setArticulation (0, 0); p.setArticulation (1, 0);
+        p.params.getParameter ("reverbMix")->setValueNotifyingHost (0.0f);   // dry, so tails don't blur the checks
+        setP ("bOn", 1);
+        setP ("aKeyHi", 59);   // A plays below middle C
+        setP ("bKeyLo", 60);   // B plays from middle C up
+        render (p, out, m, 2, bs);
+        if (std::getenv ("SOL_DEBUG"))
+            for (int L = 0; L < 4; ++L)
+                std::cout << "    layer " << L << " " << (p.getDisplayInstrument (L) ? p.getDisplayInstrument (L)->name : String ("-"))
+                          << " on=" << p.params.getRawParameterValue (SolIntentProcessor::layerParam (L, "On"))->load()
+                          << " lo=" << p.params.getRawParameterValue (SolIntentProcessor::layerParam (L, "KeyLo"))->load()
+                          << " hi=" << p.params.getRawParameterValue (SolIntentProcessor::layerParam (L, "KeyHi"))->load()
+                          << " vol=" << p.params.getRawParameterValue (SolIntentProcessor::layerParam (L, "Vol"))->load()
+                          << " art=" << p.getArticulation (L) << "\n";
+        // play C3 (60): only layer B (Koshi, 500 Hz on C3) should sound
+        capture.clear();
+        m.addEvent (MidiMessage::noteOn (1, 60, (uint8) 100), 0);
+        render (p, out, m, 20, bs, &capture);
+        int zc = 0;
+        for (int i = 1000; i < bs * 20; ++i) if (capture.getSample (0, i - 1) < 0.0f && capture.getSample (0, i) >= 0.0f) ++zc;
+        double hz = zc / ((bs * 20 - 1000) / sr);
+        CHECK (std::abs (hz - 500.0) < 20.0, "key zones: middle C goes only to layer B (" + String (hz, 0) + " Hz)");
+        p.stopAllSound(); render (p, out, m, 2, bs);
+
+        // per-layer playback mode: B sustained (stops on key up), A one-shot (keeps ringing)
+        setP ("bRing", 0); setP ("bRel", 0.02f);
+        m.addEvent (MidiMessage::noteOn (1, 61, (uint8) 100), 0);   // B (Koshi's second chime)
+        render (p, out, m, 4, bs);
+        const float heldLevel = out.getMagnitude (0, bs);
+        m.addEvent (MidiMessage::noteOff (1, 61), 0);
+        render (p, out, m, 20, bs);
+        if (std::getenv ("SOL_DEBUG")) std::cout << "    held " << heldLevel << " after " << out.getMagnitude (0, bs)
+                                                 << " space " << p.params.getRawParameterValue ("reverbMix")->load() << "\n";
+        CHECK (out.getMagnitude (0, bs) < 0.001f, "layer B set to sustained stops when the key is let go");
+        m.addEvent (MidiMessage::noteOn (1, 55, (uint8) 100), 0);   // A
+        render (p, out, m, 4, bs);
+        m.addEvent (MidiMessage::noteOff (1, 55), 0);
+        render (p, out, m, 20, bs);
+        CHECK (out.getMagnitude (0, bs) > 0.005f, "layer A (one-shot) keeps ringing after key up at the same time");
+        p.stopAllSound(); render (p, out, m, 2, bs);
+        setP ("aKeyHi", 127); setP ("bKeyLo", 0); setP ("bRing", 1);
+
+        // macros
+        p.params.getParameter ("reverbMix")->setValueNotifyingHost (0.1f);
+        p.linkToMacro (0, "reverbMix");
+        p.params.getParameter ("reverbMix")->setValueNotifyingHost (0.9f);
+        p.setMacroEnd (0, "reverbMix");
+        p.params.getParameter ("macro1")->setValueNotifyingHost (0.0f); p.applyMacros (true);
+        CHECK (std::abs (p.params.getParameter ("reverbMix")->getValue() - 0.1f) < 0.01f, "macro at 0 puts Space at its start setting");
+        p.params.getParameter ("macro1")->setValueNotifyingHost (0.5f); p.applyMacros();
+        CHECK (std::abs (p.params.getParameter ("reverbMix")->getValue() - 0.5f) < 0.01f, "macro halfway puts Space halfway");
+        p.linkToMacro (0, "eqHigh");
+        CHECK (p.getMacroLinks (0).size() == 2 && p.getMacroFor ("eqHigh") == 0, "one macro can move several knobs");
+        p.setMacroName (0, "Bloom");
+
+        // morph pad
+        setP ("cOn", 0); setP ("dOn", 0);
+        setP ("morphOn", 1); setP ("morphX", 0); setP ("morphY", 1);   // top-left = layer A only
+        p.params.getParameter ("reverbMix")->setValueNotifyingHost (0.0f);
+        render (p, out, m, 2, bs);
+        capture.clear();
+        m.addEvent (MidiMessage::noteOn (1, 60, (uint8) 100), 0);
+        render (p, out, m, 20, bs, &capture);
+        zc = 0;
+        for (int i = 1000; i < bs * 20; ++i) if (capture.getSample (0, i - 1) < 0.0f && capture.getSample (0, i) >= 0.0f) ++zc;
+        hz = zc / ((bs * 20 - 1000) / sr);
+        CHECK (std::abs (hz - 261.6) < 15.0, "morph dot in A's corner: only layer A heard (" + String (hz, 0) + " Hz)");
+        setP ("morphX", 1);   // top-right = layer B
+        render (p, out, m, 4, bs);
+        capture.clear();
+        render (p, out, m, 20, bs, &capture);
+        zc = 0;
+        for (int i = 1000; i < bs * 20; ++i) if (capture.getSample (0, i - 1) < 0.0f && capture.getSample (0, i) >= 0.0f) ++zc;
+        hz = zc / ((bs * 20 - 1000) / sr);
+        CHECK (std::abs (hz - 500.0) < 25.0, "moving the dot to B's corner fades over to layer B while it rings (" + String (hz, 0) + " Hz)");
+        setP ("lfoTarget", 4); setP ("lfoDepth", 0.8f); setP ("lfoRate", 2.0f);
+        render (p, out, m, 40, bs);
+        CHECK (std::abs (p.morphXNow.load() - 1.0f) > 0.01f || std::abs (p.morphYNow.load() - 1.0f) > 0.01f, "Morph orbit moves the dot on its own");
+        setP ("lfoDepth", 0); setP ("morphOn", 0);
+        p.stopAllSound(); render (p, out, m, 2, bs);
+
+        // effects rack
+        setP ("eqLow", 6); setP ("eqHigh", -6); setP ("chorusMix", 0.6f); setP ("delayMix", 0.5f); setP ("delayTime", 200);
+        m.addEvent (MidiMessage::noteOn (1, 60, (uint8) 110), 0);
+        render (p, out, m, 2, bs);
+        m.addEvent (MidiMessage::allNotesOff (1), 0);
+        bool ok = true; float peakFx = 0;
+        for (int b = 0; b < 80; ++b)
+        {
+            p.processBlock (out, m); m.clear();
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < bs; ++i) { float v = out.getSample (c, i); ok = ok && std::isfinite (v); peakFx = jmax (peakFx, std::abs (v)); }
+        }
+        CHECK (ok && peakFx < 1.0f && peakFx > 0.001f, "EQ + chorus + echo run cleanly (peak " + String (peakFx, 3) + ")");
+        setP ("eqLow", 0); setP ("eqHigh", 0); setP ("chorusMix", 0); setP ("delayMix", 0);
+        p.stopAllSound(); render (p, out, m, 2, bs);
+
+        // everything comes back when the project reopens
+        setP ("bAtk", 1500); setP ("cKeyLo", 72);
+        MemoryBlock st; p.getStateInformation (st);
+        SolIntentProcessor q; q.setStateInformation (st.getData(), (int) st.getSize());
+        for (int i = 0; i < 200 && q.isLoading(); ++i) Thread::sleep (10);
+        CHECK (std::abs (q.params.getRawParameterValue ("bAtk")->load() - 1500.0f) < 1.0f
+               && (int) q.params.getRawParameterValue ("cKeyLo")->load() == 72, "per-layer envelope and key zone reopen with the project");
+        CHECK (q.getMacroLinks (0).size() == 2 && q.getMacroName (0) == "Bloom", "macro links and names reopen with the project");
+        CHECK (q.getLearnedCC ("reverbMix") == 21, "MIDI learn reopens with the project");
+
+        // a brand-new copy (new track) already knows the controller
+        MessageManager::getInstance()->runDispatchLoopUntil (200);   // lets the plugin save its controller setup
+        SolIntentProcessor fresh;
+        CHECK (fresh.getLearnedCC ("reverbMix") == 21, "a new copy of the plugin remembers your controller setup");
+        p.clearMacro (0);
+        p.forgetLearning ("reverbMix");
     }
 
     std::cout << (failures == 0 ? "\nALL PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");

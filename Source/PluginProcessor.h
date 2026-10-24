@@ -4,6 +4,7 @@
 #include "Library.h"
 #include "SamplerVoice.h"
 #include "Tone.h"
+#include "Effects.h"
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -70,6 +71,22 @@ public:
     bool loadPreset (const juce::File&);
     juce::String currentPresetName { "Init" };
 
+    // ---- macros: each of the 4 macro knobs moves any number of other knobs between two settings
+    static constexpr int numMacros = 4;
+    struct MacroLink { int macro = 0; juce::String paramID; float from = 0, to = 1; };   // normalised 0..1
+    void linkToMacro (int macro, const juce::String& paramID);          // from = where the knob is now
+    void setMacroEnd (int macro, const juce::String& paramID);          // to = where the knob is now
+    void unlinkFromMacro (const juce::String& paramID);
+    int  getMacroFor (const juce::String& paramID) const;               // -1 if not linked
+    std::vector<MacroLink> getMacroLinks (int macro) const;
+    void clearMacro (int macro);
+    juce::String getMacroName (int macro) const;
+    void setMacroName (int macro, const juce::String&);
+    void applyMacros (bool force = false);                               // pushes macro positions to linked knobs
+
+    // ---- morph pad: where the blend actually is right now (includes the Motion orbit)
+    std::atomic<float> morphXNow { 0.5f }, morphYNow { 0.5f };
+
     // ---- MIDI learn
     void startLearning (const juce::String& paramID);
     void forgetLearning (const juce::String& paramID);
@@ -99,6 +116,7 @@ private:
         juce::AudioBuffer<float> buffer;
         float gainL = 0.0f, gainR = 0.0f;
         bool wasOn = true;
+        juce::MidiBuffer midi;   // only the notes inside this layer's key zone
     };
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
@@ -111,9 +129,14 @@ private:
 
     struct ParamPtrs
     {
-        std::atomic<float> *volume, *tune, *fine, *attack, *decay, *sustain, *release, *letRing, *velSens, *bend,
-                           *tone, *width, *revMix, *revSize, *lfoRate, *lfoDepth, *lfoTarget, *keyswitch;
-        std::atomic<float> *on[numLayers], *vol[numLayers], *tun[numLayers], *pan[numLayers];
+        std::atomic<float> *volume, *tune, *fine, *velSens, *bend,
+                           *tone, *width, *revMix, *revSize, *lfoRate, *lfoDepth, *lfoTarget, *keyswitch,
+                           *eqLow, *eqMid, *eqHigh, *chorusMix, *chorusDepth, *chorusRate, *delayTime, *delayFb, *delayMix,
+                           *morphOn, *morphX, *morphY;
+        std::atomic<float> *on[numLayers], *vol[numLayers], *tun[numLayers], *pan[numLayers],
+                           *atk[numLayers], *dec[numLayers], *sus[numLayers], *rel[numLayers], *ring[numLayers],
+                           *keyLo[numLayers], *keyHi[numLayers];
+        std::atomic<float> *macro[numMacros];
     } P;
 
     std::array<Layer, numLayers> layers;
@@ -132,10 +155,24 @@ private:
     std::array<std::atomic<int>, 128> ccToParam {};
     std::atomic<int> learningIndex { -1 };
     float modWheel = 0.0f;
+    std::atomic<bool> midiMapChanged { false };
+    void saveDefaultMidiMap();
+    void loadDefaultMidiMap();
+    juce::ValueTree midiMapTree() const;
+    void applyMidiMapTree (const juce::ValueTree&);
+
+    // macros
+    mutable std::mutex macroMutex;
+    std::vector<MacroLink> macroLinks;
+    std::array<juce::String, numMacros> macroNames;
+    std::array<float, numMacros> lastMacro { -1.0f, -1.0f, -1.0f, -1.0f };
 
     // effects
     juce::Reverb reverb;
     sol::Tone toneL, toneR;
+    sol::ThreeBandEQ eq;
+    sol::Chorus chorus;
+    sol::Echo echo;
     double rate = 44100.0;
     float lastTone = 99.0f, limGain = 1.0f, lfoPhase = 0.0f, lastMasterGain = 1.0f;
     juce::MidiBuffer filtered;

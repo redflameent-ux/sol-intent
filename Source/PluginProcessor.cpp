@@ -12,8 +12,16 @@ SolIntentProcessor::SolIntentProcessor()
 
     auto g = [this] (const char* id) { return params.getRawParameterValue (id); };
     P.volume = g ("volume"); P.tune = g ("tune"); P.fine = g ("fine");
-    P.attack = g ("attack"); P.decay = g ("decay"); P.sustain = g ("sustain"); P.release = g ("release");
-    P.letRing = g ("letRing"); P.velSens = g ("velSens"); P.bend = g ("bendRange");
+    P.velSens = g ("velSens"); P.bend = g ("bendRange");
+    P.eqLow = g ("eqLow"); P.eqMid = g ("eqMid"); P.eqHigh = g ("eqHigh");
+    P.chorusMix = g ("chorusMix"); P.chorusDepth = g ("chorusDepth"); P.chorusRate = g ("chorusRate");
+    P.delayTime = g ("delayTime"); P.delayFb = g ("delayFeedback"); P.delayMix = g ("delayMix");
+    P.morphOn = g ("morphOn"); P.morphX = g ("morphX"); P.morphY = g ("morphY");
+    for (int m = 0; m < numMacros; ++m)
+    {
+        P.macro[m] = params.getRawParameterValue ("macro" + juce::String (m + 1));
+        macroNames[(size_t) m] = "Macro " + juce::String (m + 1);
+    }
     P.tone = g ("tone"); P.width = g ("width"); P.revMix = g ("reverbMix"); P.revSize = g ("reverbSize");
     P.lfoRate = g ("lfoRate"); P.lfoDepth = g ("lfoDepth"); P.lfoTarget = g ("lfoTarget"); P.keyswitch = g ("keyswitch");
     for (int i = 0; i < numLayers; ++i)
@@ -22,6 +30,13 @@ SolIntentProcessor::SolIntentProcessor()
         P.vol[i] = params.getRawParameterValue (layerParam (i, "Vol"));
         P.tun[i] = params.getRawParameterValue (layerParam (i, "Tune"));
         P.pan[i] = params.getRawParameterValue (layerParam (i, "Pan"));
+        P.atk[i] = params.getRawParameterValue (layerParam (i, "Atk"));
+        P.dec[i] = params.getRawParameterValue (layerParam (i, "Dec"));
+        P.sus[i] = params.getRawParameterValue (layerParam (i, "Sus"));
+        P.rel[i] = params.getRawParameterValue (layerParam (i, "Rel"));
+        P.ring[i] = params.getRawParameterValue (layerParam (i, "Ring"));
+        P.keyLo[i] = params.getRawParameterValue (layerParam (i, "KeyLo"));
+        P.keyHi[i] = params.getRawParameterValue (layerParam (i, "KeyHi"));
     }
 
     for (auto& l : layers)
@@ -37,10 +52,11 @@ SolIntentProcessor::SolIntentProcessor()
             learnable.push_back (r);
     for (auto& c : ccToParam) c = -1;
     for (auto& glowValue : noteGlow) glowValue = 0.0f;
+    loadDefaultMidiMap();   // your controller setup carries over to new copies of the plugin
 
     rescanLibrary();
     queueLoad (0, instrumentList.front());   // the built-in demo until a project says otherwise
-    startTimerHz (10);
+    startTimerHz (30);
 }
 
 SolIntentProcessor::~SolIntentProcessor()
@@ -61,6 +77,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout SolIntentProcessor::createLa
     auto panTxt = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int)
                    { return std::abs (v) < 0.01f ? String ("C") : String (roundToInt (std::abs (v) * 100)) + (v < 0 ? " L" : " R"); });
     auto st = AudioParameterIntAttributes().withStringFromValueFunction ([] (int v, int) { return (v > 0 ? "+" : "") + String (v) + " st"; });
+    auto note = AudioParameterIntAttributes().withStringFromValueFunction ([] (int v, int) { return sol::noteName (v); })
+                                             .withValueFromStringFunction ([] (const String& t) { int n = sol::Library::parseNoteFromName (t.trim()); return n >= 0 ? n : t.getIntValue(); });
     auto add = [&l] (auto p) { l.add (std::move (p)); };
 
     // sound
@@ -75,18 +93,32 @@ juce::AudioProcessorValueTreeState::ParameterLayout SolIntentProcessor::createLa
     add (std::make_unique<AudioParameterFloat> (ParameterID { "reverbMix", 1 }, "Space", NormalisableRange<float> (0.0f, 1.0f), 0.25f, pct));
     add (std::make_unique<AudioParameterFloat> (ParameterID { "reverbSize", 1 }, "Room", NormalisableRange<float> (0.0f, 1.0f), 0.8f, pct));
 
-    // envelope
-    add (std::make_unique<AudioParameterFloat> (ParameterID { "attack", 1 }, "Attack", NormalisableRange<float> (0.0f, 4000.0f, 1.0f, 0.35f), 0.0f, ms));
-    add (std::make_unique<AudioParameterFloat> (ParameterID { "decay", 1 }, "Decay", NormalisableRange<float> (0.0f, 10000.0f, 1.0f, 0.35f), 500.0f, ms));
-    add (std::make_unique<AudioParameterFloat> (ParameterID { "sustain", 1 }, "Sustain", NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
-    add (std::make_unique<AudioParameterFloat> (ParameterID { "release", 1 }, "Release", NormalisableRange<float> (0.02f, 20.0f, 0.01f, 0.4f), 3.0f, sec));
-    add (std::make_unique<AudioParameterBool>  (ParameterID { "letRing", 1 }, "Let Ring", true));
+    // effects rack
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "eqLow", 1 }, "EQ Low", NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f, db));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "eqMid", 1 }, "EQ Mid", NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f, db));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "eqHigh", 1 }, "EQ High", NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f, db));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "chorusMix", 1 }, "Chorus", NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "chorusDepth", 1 }, "Chorus Depth", NormalisableRange<float> (0.0f, 1.0f), 0.4f, pct));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "chorusRate", 1 }, "Chorus Rate", NormalisableRange<float> (0.05f, 3.0f, 0.01f, 0.5f), 0.4f,
+                                                AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 2) + " Hz"; })));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "delayTime", 1 }, "Echo Time", NormalisableRange<float> (40.0f, 2500.0f, 1.0f, 0.5f), 450.0f, ms));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "delayFeedback", 1 }, "Echo Repeats", NormalisableRange<float> (0.0f, 0.92f), 0.35f, pct));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "delayMix", 1 }, "Echo", NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
+
+    // morph pad: blends the four layers (A top-left, B top-right, C bottom-left, D bottom-right)
+    add (std::make_unique<AudioParameterBool>  (ParameterID { "morphOn", 1 }, "Morph On", false));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "morphX", 1 }, "Morph X", NormalisableRange<float> (0.0f, 1.0f), 0.5f, pct));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "morphY", 1 }, "Morph Y", NormalisableRange<float> (0.0f, 1.0f), 0.5f, pct));
+
+    // macros
+    for (int m = 1; m <= numMacros; ++m)
+        add (std::make_unique<AudioParameterFloat> (ParameterID { "macro" + String (m), 1 }, "Macro " + String (m), NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
 
     // motion
     add (std::make_unique<AudioParameterFloat> (ParameterID { "lfoRate", 1 }, "Rate", NormalisableRange<float> (0.05f, 12.0f, 0.01f, 0.4f), 0.5f,
                                                 AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 2) + " Hz"; })));
     add (std::make_unique<AudioParameterFloat> (ParameterID { "lfoDepth", 1 }, "Depth", NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
-    add (std::make_unique<AudioParameterChoice> (ParameterID { "lfoTarget", 1 }, "Motion", StringArray { "Pitch", "Volume", "Tone", "Pan" }, 1));
+    add (std::make_unique<AudioParameterChoice> (ParameterID { "lfoTarget", 1 }, "Motion", StringArray { "Pitch", "Volume", "Tone", "Pan", "Morph orbit" }, 1));
     add (std::make_unique<AudioParameterChoice> (ParameterID { "keyswitch", 1 }, "Keyswitch", StringArray { "Off", "C-1", "C0", "C1", "C6" }, 2));
 
     // layers
@@ -98,6 +130,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout SolIntentProcessor::createLa
         add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Vol"), 1 }, L + " Level", NormalisableRange<float> (-36.0f, 6.0f, 0.1f), 0.0f, db));
         add (std::make_unique<AudioParameterInt>   (ParameterID { layerParam (i, "Tune"), 1 }, L + " Tune", -24, 24, 0, st));
         add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Pan"), 1 }, L + " Pan", NormalisableRange<float> (-1.0f, 1.0f), 0.0f, panTxt));
+        add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Atk"), 1 }, L + " Attack", NormalisableRange<float> (0.0f, 4000.0f, 1.0f, 0.35f), 0.0f, ms));
+        add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Dec"), 1 }, L + " Decay", NormalisableRange<float> (0.0f, 10000.0f, 1.0f, 0.35f), 500.0f, ms));
+        add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Sus"), 1 }, L + " Sustain", NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
+        add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Rel"), 1 }, L + " Release", NormalisableRange<float> (0.02f, 20.0f, 0.01f, 0.4f), 3.0f, sec));
+        add (std::make_unique<AudioParameterBool>  (ParameterID { layerParam (i, "Ring"), 1 }, L + " Let Ring", true));
+        add (std::make_unique<AudioParameterInt>   (ParameterID { layerParam (i, "KeyLo"), 1 }, L + " Lowest Key", 0, 127, 0, note));
+        add (std::make_unique<AudioParameterInt>   (ParameterID { layerParam (i, "KeyHi"), 1 }, L + " Highest Key", 0, 127, 127, note));
     }
     return l;
 }
@@ -118,6 +157,9 @@ void SolIntentProcessor::prepareToPlay (double sampleRate, int block)
     }
     reverb.setSampleRate (sampleRate);
     reverb.reset();
+    eq.prepare (rate);
+    chorus.prepare (rate);
+    echo.prepare (rate);
     toneL.reset(); toneR.reset();
     lastTone = 99.0f;
     limGain = 1.0f;
@@ -159,6 +201,7 @@ void SolIntentProcessor::handleMidi (juce::MidiBuffer& in, juce::MidiBuffer& out
                 for (auto& c : ccToParam) if (c.load() == learn) c = -1;
                 ccToParam[(size_t) cc] = learn;
                 learningIndex = -1;
+                midiMapChanged = true;
             }
             if (int idx = ccToParam[(size_t) cc].load(); idx >= 0 && idx < (int) learnable.size())
             {
@@ -224,11 +267,22 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         l.wasOn = on[i];
         s.instrument = l.current.get();
         s.articulation = l.articulation.load();
-        s.attackSec  = P.attack->load() / 1000.0f;
-        s.decaySec   = P.decay->load() / 1000.0f;
-        s.sustain    = P.sustain->load();
-        s.releaseSec = P.release->load();
-        s.letRing    = P.letRing->load() > 0.5f;
+        s.attackSec  = P.atk[i]->load() / 1000.0f;
+        s.decaySec   = P.dec[i]->load() / 1000.0f;
+        s.sustain    = P.sus[i]->load();
+        s.releaseSec = P.rel[i]->load();
+        s.letRing    = P.ring[i]->load() > 0.5f;
+
+        // this layer only hears notes inside its key zone (note-offs always pass, so nothing hangs)
+        const int lo = (int) P.keyLo[i]->load(), hi = (int) P.keyHi[i]->load();
+        l.midi.clear();
+        for (const auto meta : filtered)
+        {
+            auto m = meta.getMessage();
+            if (m.isNoteOn() && (m.getNoteNumber() < juce::jmin (lo, hi) || m.getNoteNumber() > juce::jmax (lo, hi)))
+                continue;
+            l.midi.addEvent (m, meta.samplePosition);
+        }
         s.velSens    = P.velSens->load();
         s.bendRange  = P.bend->load();
         if (l.buffer.getNumSamples() < n) l.buffer.setSize (2, n, false, false, true);
@@ -243,22 +297,42 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     auto* L = buffer.getWritePointer (0);
     auto* R = stereo ? buffer.getWritePointer (1) : nullptr;
 
+    const bool morphOn = P.morphOn->load() > 0.5f;
+
     for (int start = 0; start < n; start += chunk)
     {
         const int len = juce::jmin (chunk, n - start);
         const float lfo = std::sin (lfoPhase) * depth;   // -depth .. +depth
+        const float lfoCos = std::cos (lfoPhase) * depth;
         lfoPhase = std::fmod (lfoPhase + lfoInc * (float) len, juce::MathConstants<float>::twoPi);
+
+        // morph pad: equal-power blend of the four corners
+        float morphGain[numLayers] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        if (morphOn)
+        {
+            float x = P.morphX->load(), y = P.morphY->load();
+            if (target == 4) { x += 0.45f * lfoCos; y += 0.45f * lfo; }   // the Motion LFO circles the dot
+            x = juce::jlimit (0.0f, 1.0f, x); y = juce::jlimit (0.0f, 1.0f, y);
+            morphXNow = x; morphYNow = y;
+            const float w[numLayers] = { (1 - x) * y, x * y, (1 - x) * (1 - y), x * (1 - y) };   // y = 1 is the top
+            for (int i = 0; i < numLayers; ++i) morphGain[i] = std::sqrt (w[i]);
+        }
+        else
+        {
+            morphXNow = P.morphX->load(); morphYNow = P.morphY->load();
+        }
 
         for (int i = 0; i < numLayers; ++i)
         {
             auto& l = layers[(size_t) i];
             l.settings.tuneSemis = baseTune + P.tun[i]->load() + (target == 0 ? lfo * 0.5f : 0.0f);   // up to +/- 50 cents
             if (on[i])
-                l.synth.renderNextBlock (l.buffer, filtered, start, len);
+                l.synth.renderNextBlock (l.buffer, l.midi, start, len);
 
             // layer level and pan (constant power), LFO pan / volume on top
             float pan = juce::jlimit (-1.0f, 1.0f, P.pan[i]->load() + (target == 3 ? lfo : 0.0f));
-            float g = juce::Decibels::decibelsToGain (P.vol[i]->load()) * (target == 1 ? 1.0f - 0.5f * depth + 0.5f * lfo : 1.0f);
+            float g = juce::Decibels::decibelsToGain (P.vol[i]->load()) * morphGain[i]
+                      * (target == 1 ? 1.0f - 0.5f * depth + 0.5f * lfo : 1.0f);
             float a = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
             float gl = g * std::cos (a) * juce::MathConstants<float>::sqrt2, gr = g * std::sin (a) * juce::MathConstants<float>::sqrt2;
             if (std::abs (pan) < 1.0e-4f) gl = gr = g;   // centred = untouched
@@ -284,6 +358,11 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             if (R != nullptr) R[k] = toneR.process (R[k]);
         }
     }
+
+    // effects rack: EQ -> chorus -> echo, then width and reverb below
+    eq.process (L, R, n, P.eqLow->load(), P.eqMid->load(), P.eqHigh->load());
+    chorus.process (L, R, n, P.chorusMix->load(), P.chorusDepth->load(), P.chorusRate->load());
+    echo.process (L, R, n, P.delayTime->load(), P.delayFb->load(), P.delayMix->load());
 
     if (R != nullptr)   // stereo width
     {
@@ -466,6 +545,94 @@ void SolIntentProcessor::timerCallback()
         const juce::SpinLock::ScopedLockType sl (l.swapLock);
         toFree.swap (l.retired);
     }
+
+    applyMacros();
+    if (midiMapChanged.exchange (false))
+        saveDefaultMidiMap();
+}
+
+// ------------------------------------------------------------------------------ macros
+void SolIntentProcessor::applyMacros (bool force)
+{
+    std::vector<MacroLink> links;
+    {
+        std::lock_guard<std::mutex> g (macroMutex);
+        links = macroLinks;
+    }
+    for (int m = 0; m < numMacros; ++m)
+    {
+        const float v = params.getParameter ("macro" + juce::String (m + 1))->getValue();
+        if (! force && std::abs (v - lastMacro[(size_t) m]) < 1.0e-4f) continue;
+        lastMacro[(size_t) m] = v;
+        for (auto& link : links)
+            if (link.macro == m)
+                if (auto* prm = params.getParameter (link.paramID))
+                    prm->setValueNotifyingHost (link.from + (link.to - link.from) * v);
+    }
+}
+
+void SolIntentProcessor::linkToMacro (int macro, const juce::String& id)
+{
+    auto* prm = params.getParameter (id);
+    if (prm == nullptr || macro < 0 || macro >= numMacros || id.startsWith ("macro")) return;
+    const float now = prm->getValue();
+    {
+        std::lock_guard<std::mutex> g (macroMutex);
+        macroLinks.erase (std::remove_if (macroLinks.begin(), macroLinks.end(), [&] (auto& l) { return l.paramID == id; }), macroLinks.end());
+        // starts where the knob is now and sweeps toward the far end; "Macro ends here" changes the end
+        macroLinks.push_back ({ macro, id, now, now < 0.5f ? 1.0f : 0.0f });
+    }
+    // line the macro up so the knob doesn't jump: macro at zero = where the knob is
+    params.getParameter ("macro" + juce::String (macro + 1))->setValueNotifyingHost (0.0f);
+    lastMacro[(size_t) macro] = 0.0f;
+}
+
+void SolIntentProcessor::setMacroEnd (int macro, const juce::String& id)
+{
+    auto* prm = params.getParameter (id);
+    if (prm == nullptr) return;
+    std::lock_guard<std::mutex> g (macroMutex);
+    for (auto& l : macroLinks)
+        if (l.paramID == id && l.macro == macro) l.to = prm->getValue();
+}
+
+void SolIntentProcessor::unlinkFromMacro (const juce::String& id)
+{
+    std::lock_guard<std::mutex> g (macroMutex);
+    macroLinks.erase (std::remove_if (macroLinks.begin(), macroLinks.end(), [&] (auto& l) { return l.paramID == id; }), macroLinks.end());
+}
+
+int SolIntentProcessor::getMacroFor (const juce::String& id) const
+{
+    std::lock_guard<std::mutex> g (macroMutex);
+    for (auto& l : macroLinks) if (l.paramID == id) return l.macro;
+    return -1;
+}
+
+std::vector<SolIntentProcessor::MacroLink> SolIntentProcessor::getMacroLinks (int macro) const
+{
+    std::lock_guard<std::mutex> g (macroMutex);
+    std::vector<MacroLink> out;
+    for (auto& l : macroLinks) if (l.macro == macro) out.push_back (l);
+    return out;
+}
+
+void SolIntentProcessor::clearMacro (int macro)
+{
+    std::lock_guard<std::mutex> g (macroMutex);
+    macroLinks.erase (std::remove_if (macroLinks.begin(), macroLinks.end(), [&] (auto& l) { return l.macro == macro; }), macroLinks.end());
+}
+
+juce::String SolIntentProcessor::getMacroName (int macro) const
+{
+    std::lock_guard<std::mutex> g (macroMutex);
+    return macroNames[(size_t) juce::jlimit (0, numMacros - 1, macro)];
+}
+
+void SolIntentProcessor::setMacroName (int macro, const juce::String& name)
+{
+    std::lock_guard<std::mutex> g (macroMutex);
+    macroNames[(size_t) juce::jlimit (0, numMacros - 1, macro)] = name.trim().isEmpty() ? "Macro " + juce::String (macro + 1) : name.trim();
 }
 
 // ------------------------------------------------------------------------------ MIDI learn
@@ -482,6 +649,41 @@ void SolIntentProcessor::forgetLearning (const juce::String& id)
 {
     int idx = indexOf (learnable, id);
     for (auto& c : ccToParam) if (c.load() == idx) c = -1;
+    saveDefaultMidiMap();
+}
+
+juce::ValueTree SolIntentProcessor::midiMapTree() const
+{
+    juce::ValueTree mm ("MidiMap");
+    for (int c = 0; c < 128; ++c)
+        if (int idx = ccToParam[(size_t) c].load(); idx >= 0 && idx < (int) learnable.size())
+            mm.appendChild (juce::ValueTree ("CC", { { "cc", c }, { "param", learnable[(size_t) idx]->getParameterID() } }), nullptr);
+    return mm;
+}
+
+void SolIntentProcessor::applyMidiMapTree (const juce::ValueTree& mm)
+{
+    for (auto& c : ccToParam) c = -1;
+    for (auto cc : mm)
+    {
+        int idx = indexOf (learnable, cc["param"].toString());
+        int num = cc["cc"];
+        if (idx >= 0 && num >= 0 && num < 128) ccToParam[(size_t) num] = idx;
+    }
+}
+
+// The controller setup is also kept on this computer, so a fresh copy of the plugin
+// (a new track, a new project) already knows your knobs and faders.
+void SolIntentProcessor::saveDefaultMidiMap()
+{
+    if (auto xml = midiMapTree().createXml())
+        sol::Library::setSetting ("midiMap", xml->toString (juce::XmlElement::TextFormat().singleLine()));
+}
+
+void SolIntentProcessor::loadDefaultMidiMap()
+{
+    if (auto xml = juce::parseXML (sol::Library::getSetting ("midiMap")))
+        applyMidiMapTree (juce::ValueTree::fromXml (*xml));
 }
 
 int SolIntentProcessor::getLearnedCC (const juce::String& id) const
@@ -514,12 +716,19 @@ juce::ValueTree SolIntentProcessor::makeState()
         state.removeChild (state.getChildWithProperty ("index", i), nullptr);
         state.appendChild (lt, nullptr);
     }
-    juce::ValueTree mm ("MidiMap");
-    for (int c = 0; c < 128; ++c)
-        if (int idx = ccToParam[(size_t) c].load(); idx >= 0)
-            mm.appendChild (juce::ValueTree ("CC", { { "cc", c }, { "param", learnable[(size_t) idx]->getParameterID() } }), nullptr);
     state.removeChild (state.getChildWithName ("MidiMap"), nullptr);
-    state.appendChild (mm, nullptr);
+    state.appendChild (midiMapTree(), nullptr);
+
+    juce::ValueTree macros ("Macros");
+    {
+        std::lock_guard<std::mutex> g (macroMutex);
+        for (int m = 0; m < numMacros; ++m)
+            macros.appendChild (juce::ValueTree ("Name", { { "index", m }, { "text", macroNames[(size_t) m] } }), nullptr);
+        for (auto& l : macroLinks)
+            macros.appendChild (juce::ValueTree ("Link", { { "macro", l.macro }, { "param", l.paramID }, { "from", l.from }, { "to", l.to } }), nullptr);
+    }
+    state.removeChild (state.getChildWithName ("Macros"), nullptr);
+    state.appendChild (macros, nullptr);
     state.setProperty ("padBase", padBaseNote, nullptr);
     state.setProperty ("preset", currentPresetName, nullptr);
     return state;
@@ -531,16 +740,26 @@ void SolIntentProcessor::applyState (const juce::ValueTree& state)
     padBaseNote = state.getProperty ("padBase", 48);
     currentPresetName = state.getProperty ("preset", "Init").toString();
 
-    if (auto mm = state.getChildWithName ("MidiMap"); mm.isValid())
+    if (auto mm = state.getChildWithName ("MidiMap"); mm.isValid() && mm.getNumChildren() > 0)
+        applyMidiMapTree (mm);   // a project with its own controller setup; otherwise keep the computer's default
+
     {
-        for (auto& c : ccToParam) c = -1;
-        for (auto cc : mm)
+        std::lock_guard<std::mutex> g (macroMutex);
+        macroLinks.clear();
+        for (int m = 0; m < numMacros; ++m) macroNames[(size_t) m] = "Macro " + juce::String (m + 1);
+        for (auto c : state.getChildWithName ("Macros"))
         {
-            int idx = indexOf (learnable, cc["param"].toString());
-            int num = cc["cc"];
-            if (idx >= 0 && num >= 0 && num < 128) ccToParam[(size_t) num] = idx;
+            if (c.hasType ("Name")) { int m = c["index"]; if (m >= 0 && m < numMacros) macroNames[(size_t) m] = c["text"].toString(); }
+            if (c.hasType ("Link"))
+            {
+                int m = c["macro"];
+                if (m >= 0 && m < numMacros && params.getParameter (c["param"].toString()) != nullptr)
+                    macroLinks.push_back ({ m, c["param"].toString(), (float) c["from"], (float) c["to"] });
+            }
         }
     }
+    for (auto& v : lastMacro) v = -1.0f;   // linked knobs follow the macros again
+    for (int m = 0; m < numMacros; ++m) lastMacro[(size_t) m] = params.getParameter ("macro" + juce::String (m + 1))->getValue();
 
     rescanLibrary();
     auto root = sol::Library::getLibraryFolder();

@@ -24,7 +24,7 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     setLookAndFeel (&look);
 
     for (auto* b : { &libraryButton, &rescanButton, &stopButton, &presetButton, &prevPreset, &nextPreset, &savePreset,
-                     &playTab, &mapTab, &newButton, &octDown, &octUp })
+                     &playTab, &mapTab, &fxTab, &newButton, &octDown, &octUp })
         addAndMakeVisible (b);
 
     libraryButton.setTooltip ("Choose the folder that holds your instrument folders");
@@ -51,8 +51,11 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     savePreset.onClick = [this] { savePresetAs(); };
     playTab.setClickingTogglesState (false);
     mapTab.setClickingTogglesState (false);
-    playTab.onClick = [this] { showMap (false); };
-    mapTab.onClick  = [this] { showMap (true); };
+    fxTab.setClickingTogglesState (false);
+    playTab.onClick = [this] { showView (0); };
+    mapTab.onClick  = [this] { showView (1); };
+    fxTab.onClick   = [this] { showView (2); };
+    fxTab.setTooltip ("EQ, chorus, echo and space");
     mapTab.setTooltip ("Import recordings and set their root notes, key ranges, velocities and articulations");
     newButton.onClick = [this] { newInstrument(); };
     octDown.onClick = [this] { proc.padBaseNote = jmax (0, proc.padBaseNote - 12); pads.repaint(); };
@@ -70,6 +73,8 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     addAndMakeVisible (resonance);
     addAndMakeVisible (pads);
     addChildComponent (mapView);
+    addChildComponent (fxView);
+    addAndMakeVisible (morph);
 
     keyboard.setKeyWidth (16.0f);
     keyboard.setAvailableRange (12, 108);
@@ -89,18 +94,38 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     addAndMakeVisible (padRangeLabel);
 
     struct Def { const char* id; const char* label; bool bipolar; };
+    // 0-3 the selected layer's envelope (re-pointed when you pick another layer), 4-5 motion,
+    // 6-9 macros, 10-14 overall sound
     const Def defs[] = {
-        { "attack", "Attack", false }, { "decay", "Decay", false }, { "sustain", "Sustain", false }, { "release", "Release", false },
+        { "aAtk", "Attack", false }, { "aDec", "Decay", false }, { "aSus", "Sustain", false }, { "aRel", "Release", false },
         { "lfoRate", "Rate", false }, { "lfoDepth", "Depth", false },
+        { "macro1", "Macro 1", false }, { "macro2", "Macro 2", false }, { "macro3", "Macro 3", false }, { "macro4", "Macro 4", false },
         { "volume", "Volume", false }, { "tune", "Tune", true }, { "fine", "Fine", true }, { "velSens", "Touch", false },
-        { "tone", "Tone", true }, { "width", "Width", false }, { "reverbMix", "Space", false }, { "reverbSize", "Room", false },
         { "bendRange", "Bend", false } };
     for (auto& d : defs)
         addAndMakeVisible (knobs.add (new ParamKnob (proc, d.id, d.label, d.bipolar)));
 
-    letRing.setTooltip ("On: recordings ring out fully after you let go, like the real instrument.\nOff: letting go fades them by the Release time.");
-    letRingAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (proc.params, "letRing", letRing);
+    letRing.setTooltip ("On (one-shot): this layer's recordings ring out fully after you let go, like the real instrument.\n"
+                        "Off (sustained): they play while you hold the key, then fade by the Release time.");
     addAndMakeVisible (letRing);
+
+    for (auto* zs : { &zoneLo, &zoneHi })
+    {
+        zs->setSliderStyle (Slider::LinearBar);
+        zs->setTextBoxStyle (Slider::TextBoxBelow, false, 60, 18);
+        zs->setColour (Slider::textBoxOutlineColourId, Colours::transparentBlack);
+        zs->setColour (Slider::textBoxTextColourId, ui::text);
+        zs->setVelocityBasedMode (true);
+        zs->setVelocityModeParameters (0.5, 1, 0.0, false);
+        addAndMakeVisible (zs);
+    }
+    zoneLo.setTooltip ("Lowest key this layer plays. Drag, or double-click and type a note like C2.");
+    zoneHi.setTooltip ("Highest key this layer plays. Split the keyboard between layers, e.g. bowls low and chimes high.");
+    zoneL.setText ("KEYS", dontSendNotification);
+    zoneL.setFont (FontOptions (10.5f));
+    zoneL.setColour (Label::textColourId, ui::goldDim.brighter (0.4f));
+    addAndMakeVisible (zoneL);
+    pointLayerControlsAt (0);
 
     auto setupCombo = [this] (ComboBox& box, Label& l, const String& id, const String& text)
     {
@@ -121,7 +146,7 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     keyswitchAtt = std::make_unique<AudioProcessorValueTreeState::ComboBoxAttachment> (proc.params, "keyswitch", keyswitch);
 
     refreshList();
-    showMap (false);
+    showView (0);
     setSize (1200, 790);
     startTimerHz (30);
 }
@@ -203,9 +228,10 @@ void SolIntentEditor::paint (Graphics& g)
         g.drawHorizontalLine (r.getBottom() - 1, (float) r.getX() + 90.0f, (float) r.getRight());
     };
     heading (browserArea.reduced (14, 0).withHeight (30), "INSTRUMENTS");
-    heading (sectionEnv, "ENVELOPE");
+    heading (sectionEnv, "LAYER " + SolIntentProcessor::layerLetter (proc.activeLayer));
     heading (sectionMotion, "MOTION");
-    heading (sectionSound, "SOUND");
+    heading (sectionMacros, "MACROS");
+    heading (sectionSound, "OVERALL");
 }
 
 void SolIntentEditor::paintOverChildren (Graphics& g)
@@ -272,14 +298,22 @@ void SolIntentEditor::resized()
     knobArea = area.removeFromRight (340);
     area.removeFromRight (12);
     auto k = knobArea.reduced (14, 8);
-    const int cw = k.getWidth() / 4, kh = 86;
+    const int cw = k.getWidth() / 4, kh = 76;
     auto place = [&] (int i, Rectangle<int> cell) { knobs[i]->setBounds (cell.reduced (2, 0)); };
 
-    sectionEnv = k.removeFromTop (24);
+    // the selected layer: envelope, one-shot / sustained, key zone
+    sectionEnv = k.removeFromTop (22);
     auto row = k.removeFromTop (kh);
     for (int i = 0; i < 4; ++i) place (i, row.removeFromLeft (cw));
-    k.removeFromTop (4);
-    sectionMotion = k.removeFromTop (24);
+    row = k.removeFromTop (30);
+    letRing.setBounds (row.removeFromLeft (cw + 20).reduced (0, 2));
+    zoneL.setBounds (row.removeFromLeft (38));
+    zoneLo.setBounds (row.removeFromLeft ((row.getWidth() - 6) / 2).reduced (0, 3));
+    row.removeFromLeft (6);
+    zoneHi.setBounds (row.reduced (0, 3));
+    k.removeFromTop (6);
+
+    sectionMotion = k.removeFromTop (22);
     row = k.removeFromTop (kh);
     place (4, row.removeFromLeft (cw));
     place (5, row.removeFromLeft (cw));
@@ -287,16 +321,18 @@ void SolIntentEditor::resized()
     lfoTargetL.setBounds (comboCell.removeFromTop (14));
     lfoTarget.setBounds (comboCell.withSizeKeepingCentre (comboCell.getWidth(), 28).translated (0, -8));
     k.removeFromTop (4);
-    sectionSound = k.removeFromTop (24);
-    for (int r = 0; r < 2; ++r)
-    {
-        row = k.removeFromTop (kh);
-        for (int i = 0; i < 4; ++i) place (6 + r * 4 + i, row.removeFromLeft (cw));
-    }
+
+    sectionMacros = k.removeFromTop (22);
+    row = k.removeFromTop (kh);
+    for (int i = 0; i < 4; ++i) place (6 + i, row.removeFromLeft (cw));
+    k.removeFromTop (4);
+
+    sectionSound = k.removeFromTop (22);
+    row = k.removeFromTop (kh);
+    for (int i = 0; i < 4; ++i) place (10 + i, row.removeFromLeft (cw));
     row = k.removeFromTop (kh);
     place (14, row.removeFromLeft (cw));
-    auto ringCell = row.removeFromLeft (cw + 10);
-    letRing.setBounds (ringCell.withSizeKeepingCentre (ringCell.getWidth(), 28).translated (0, -6));
+    row.removeFromLeft (cw / 2);
     auto ksCell = row.reduced (4, 0);
     keyswitchL.setBounds (ksCell.removeFromTop (14));
     keyswitch.setBounds (ksCell.withSizeKeepingCentre (ksCell.getWidth(), 28).translated (0, -8));
@@ -308,10 +344,16 @@ void SolIntentEditor::resized()
     playTab.setBounds (tabs.removeFromLeft (90));
     tabs.removeFromLeft (6);
     mapTab.setBounds (tabs.removeFromLeft (90));
+    tabs.removeFromLeft (6);
+    fxTab.setBounds (tabs.removeFromLeft (90));
     c.removeFromTop (8);
     mapView.setBounds (c);
+    fxView.setBounds (c);
 
-    resonance.setBounds (c.removeFromTop (artButtons.isEmpty() ? 236 : 210));
+    auto playTop = c.removeFromTop (artButtons.isEmpty() ? 236 : 210);
+    morph.setBounds (playTop.removeFromRight (jmin (playTop.getHeight() + 20, playTop.getWidth() / 2)));
+    playTop.removeFromRight (8);
+    resonance.setBounds (playTop);
     c.removeFromTop (8);
     auto artRow = artButtons.isEmpty() ? Rectangle<int>() : c.removeFromTop (28);
     int bx = artRow.getX();
@@ -331,22 +373,49 @@ void SolIntentEditor::resized()
 }
 
 // ---------------------------------------------------------------------------- modes & layers
-void SolIntentEditor::showMap (bool on)
+void SolIntentEditor::showMap (bool on) { showView (on ? 1 : 0); }
+
+void SolIntentEditor::showView (int v)
 {
-    mapMode = on;
-    mapView.setVisible (on);
-    for (auto* comp : std::initializer_list<Component*> { &resonance, &pads, &octDown, &octUp, &padRangeLabel })
-        comp->setVisible (! on);
-    for (auto* b : artButtons) b->setVisible (! on);
-    playTab.setToggleState (! on, dontSendNotification);
-    mapTab.setToggleState (on, dontSendNotification);
-    if (on)
+    view = v;
+    mapMode = v == 1;
+    const bool play = v == 0;
+    mapView.setVisible (v == 1);
+    fxView.setVisible (v == 2);
+    for (auto* comp : std::initializer_list<Component*> { &resonance, &morph, &pads, &octDown, &octUp, &padRangeLabel })
+        comp->setVisible (play);
+    for (auto* b : artButtons) b->setVisible (play);
+    playTab.setToggleState (v == 0, dontSendNotification);
+    mapTab.setToggleState (v == 1, dontSendNotification);
+    fxTab.setToggleState (v == 2, dontSendNotification);
+    if (v == 1)
         mapView.setTarget (proc.getLayerInfo (proc.activeLayer), proc.getArticulation (proc.activeLayer));
+}
+
+// The LAYER section on the right always edits whichever layer card is selected.
+void SolIntentEditor::pointLayerControlsAt (int layer)
+{
+    if (layer == controlsLayer) return;
+    controlsLayer = layer;
+    auto id = [layer] (const char* what) { return SolIntentProcessor::layerParam (layer, what); };
+    knobs[0]->setParam (id ("Atk"), "Attack");
+    knobs[1]->setParam (id ("Dec"), "Decay");
+    knobs[2]->setParam (id ("Sus"), "Sustain");
+    knobs[3]->setParam (id ("Rel"), "Release");
+    letRingAtt.reset();
+    letRingAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (proc.params, id ("Ring"), letRing);
+    zoneLoAtt.reset(); zoneHiAtt.reset();
+    zoneLoAtt = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.params, id ("KeyLo"), zoneLo);
+    zoneHiAtt = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.params, id ("KeyHi"), zoneHi);
+    zoneLo.setDoubleClickReturnValue (true, 0.0);
+    zoneHi.setDoubleClickReturnValue (true, 127.0);
+    repaint (sectionEnv);
 }
 
 void SolIntentEditor::setActiveLayer (int i)
 {
     proc.activeLayer = i;
+    pointLayerControlsAt (i);
     for (auto& card : cards) card->repaint();
     browser.repaint();
     shownLayer = -1;   // forces a refresh
@@ -365,9 +434,8 @@ void SolIntentEditor::rebuildArticulationButtons()
         auto* b = artButtons.add (new TextButton (label));
         b->setClickingTogglesState (false);
         b->onClick = [this, i] { proc.setArticulation (proc.activeLayer, i); };
-        b->setVisible (! mapMode);
         addAndMakeVisible (b);
-        b->setVisible (! mapMode);
+        b->setVisible (view == 0);
     }
     resized();
 }
@@ -683,6 +751,8 @@ void SolIntentEditor::timerCallback()
     }
 
     for (auto* k : knobs) k->refreshLearnState();
+    if (view == 2) fxView.refresh();
+    if (view == 0) morph.repaint();
 
     String status;
     if (proc.getLearningParam().isNotEmpty())
