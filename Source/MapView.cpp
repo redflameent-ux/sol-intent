@@ -467,7 +467,7 @@ void MapView::paint (Graphics& g)
             float y1 = grid.getBottom() - grid.getHeight() * (float) (z.velHi + 1) / 128.0f;
             float y2 = grid.getBottom() - grid.getHeight() * (float) z.velLo / 128.0f;
             auto zr = Rectangle<float> (x1, y1, x2 - x1, y2 - y1).reduced (0.5f);
-            auto col = ui::violet.interpolatedWith (ui::gold, (float) (z.root % 12) / 11.0f);
+            auto col = ui::teal.interpolatedWith (ui::violet, (float) (z.root % 12) / 11.0f);
             g.setColour (col.withAlpha (i == selected ? 0.55f : 0.22f));
             g.fillRect (zr);
             g.setColour (i == selected ? ui::gold : col.withAlpha (0.6f));
@@ -485,7 +485,7 @@ void MapView::paint (Graphics& g)
         static const bool black[] = { 0,1,0,1,0,0,1,0,1,0,1,0 };
         auto kr = Rectangle<float> (xForKey (k), kb.getY(), xForKey (k + 1) - xForKey (k), kb.getHeight()).reduced (0.3f, 0);
         g.setColour (black[k % 12] ? Colour (0xff2a2532) : Colour (0xffbdb5a6));
-        if (proc.keyboardState.isNoteOnForChannels (0xffff, k)) g.setColour (ui::gold);
+        if (proc.keyboardState.isNoteOnForChannels (0xffff, k)) g.setColour (ui::teal);
         g.fillRect (kr);
     }
 

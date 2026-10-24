@@ -4,17 +4,17 @@
 
 namespace ui
 {
-    // Palette: candle-lit temple at night - deep indigo, brass gold, a little violet and teal.
-    const juce::Colour bg       { 0xff0c0a12 };
-    const juce::Colour panel    { 0xff15111d };
-    const juce::Colour panelHi  { 0xff1e1829 };
-    const juce::Colour line     { 0xff2c2438 };
-    const juce::Colour gold     { 0xffd9b36c };
-    const juce::Colour goldDim  { 0xff8a7448 };
-    const juce::Colour violet   { 0xff8d72ff };
-    const juce::Colour teal     { 0xff63d6c6 };
-    const juce::Colour text     { 0xffe9e2d4 };
-    const juce::Colour textDim  { 0xff8f8698 };
+    // Palette: deep night-sky navy, warm copper linework, glowing cyan energy, cream lettering.
+    const juce::Colour bg       { 0xff070d1a };
+    const juce::Colour panel    { 0xff0d1628 };
+    const juce::Colour panelHi  { 0xff132038 };
+    const juce::Colour line     { 0xff1f2f4b };
+    const juce::Colour gold     { 0xffd08a5c };   // copper
+    const juce::Colour goldDim  { 0xff8c5a3c };
+    const juce::Colour violet   { 0xff2f7bff };   // deep electric blue
+    const juce::Colour teal     { 0xff3fe6f2 };   // cyan glow
+    const juce::Colour text     { 0xfff0e4cf };   // cream
+    const juce::Colour textDim  { 0xff7f8aa3 };
 
     juce::String u8 (const char*);   // UTF-8 literal helper
 

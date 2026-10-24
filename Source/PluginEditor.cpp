@@ -66,7 +66,7 @@ void ui::Look::drawRotarySlider (Graphics& g, int x, int y, int w, int h, float 
     // body: a small dark bowl seen from above
     g.setGradientFill (ColourGradient (panelHi.brighter (0.15f), c.x, c.y - r, bg, c.x, c.y + r, false));
     g.fillEllipse (Rectangle<float> (r * 1.4f, r * 1.4f).withCentre (c));
-    g.setColour (line.brighter (0.2f));
+    g.setColour (goldDim);
     g.drawEllipse (Rectangle<float> (r * 1.4f, r * 1.4f).withCentre (c), 1.0f);
 
     Path track;
@@ -80,11 +80,14 @@ void ui::Look::drawRotarySlider (Graphics& g, int x, int y, int w, int h, float 
     const float to = start + pos * (end - start);
     Path val;
     val.addCentredArc (c.x, c.y, r - stroke, r - stroke, 0.0f, jmin (from, to), jmax (from, to), true);
-    g.setColour (learning ? violet : s.isEnabled() ? gold : goldDim);
+    auto arcCol = learning ? violet : s.isEnabled() ? teal : teal.withAlpha (0.4f);
+    g.setColour (arcCol.withAlpha (0.18f));
+    g.strokePath (val, PathStrokeType (stroke * 3.0f, PathStrokeType::curved, PathStrokeType::rounded));
+    g.setColour (arcCol);
     g.strokePath (val, PathStrokeType (stroke, PathStrokeType::curved, PathStrokeType::rounded));
 
     auto tip = c.getPointOnCircumference (r * 0.52f, to);
-    g.setColour (gold.brighter (0.3f));
+    g.setColour (text);
     g.fillEllipse (Rectangle<float> (4.5f, 4.5f).withCentre (tip));
 }
 
@@ -224,7 +227,7 @@ void ResonanceView::paint (Graphics& g)
     const float R = jmin (b.getWidth(), b.getHeight()) * 0.42f;
 
     // faint flower-of-life behind everything
-    g.setColour (ui::line.withAlpha (0.55f));
+    g.setColour (ui::goldDim.withAlpha (0.45f));
     const float fr = R * 0.33f;
     g.drawEllipse (Rectangle<float> (fr * 2, fr * 2).withCentre (c), 0.8f);
     for (int i = 0; i < 6; ++i)
@@ -248,8 +251,8 @@ void ResonanceView::paint (Graphics& g)
 
     // glow in the middle follows the output level
     const float lvl = jlimit (0.0f, 1.0f, proc.outputLevel.load() * 2.0f);
-    g.setGradientFill (ColourGradient (ui::gold.withAlpha (0.10f + 0.35f * lvl), c.x, c.y,
-                                       ui::gold.withAlpha (0.0f), c.x + R * 0.8f, c.y, true));
+    g.setGradientFill (ColourGradient (ui::teal.withAlpha (0.08f + 0.35f * lvl), c.x, c.y,
+                                       ui::teal.withAlpha (0.0f), c.x + R * 0.8f, c.y, true));
     g.fillEllipse (Rectangle<float> (R * 1.6f, R * 1.6f).withCentre (c));
 
     // one rippling ring per note still sounding: low notes inside, high notes outside
@@ -270,8 +273,10 @@ void ResonanceView::paint (Graphics& g)
             if (i == 0) ring.startNewSubPath (pt); else ring.lineTo (pt);
         }
         ring.closeSubPath();
-        auto col = ui::violet.interpolatedWith (ui::gold, (float) (n % 12) / 11.0f);
-        g.setColour (col.withAlpha (0.25f + 0.6f * v));
+        auto col = ui::teal.interpolatedWith (ui::gold, (float) (n % 12) / 11.0f * 0.6f);
+        g.setColour (col.withAlpha (0.10f + 0.15f * v));
+        g.strokePath (ring, PathStrokeType (5.0f + 4.0f * v));
+        g.setColour (col.withAlpha (0.35f + 0.6f * v));
         g.strokePath (ring, PathStrokeType (1.0f + 1.5f * v));
 
         auto dot = c.getPointOnCircumference (R - 5.0f, MathConstants<float>::twoPi * (float) (n % 12) / 12.0f);
@@ -319,10 +324,10 @@ void PadGrid::paint (Graphics& g)
         g.fillRoundedRectangle (r, 6.0f);
         if (glow > 0.01f || down)
         {
-            g.setColour (ui::gold.withAlpha (jmax (glow * 0.55f, down ? 0.45f : 0.0f)));
+            g.setColour (ui::teal.withAlpha (jmax (glow * 0.35f, down ? 0.30f : 0.0f)));
             g.fillRoundedRectangle (r, 6.0f);
         }
-        g.setColour (down ? ui::gold : playable ? ui::line.brighter (0.25f) : ui::line);
+        g.setColour (down || glow > 0.05f ? ui::teal : playable ? ui::goldDim.withAlpha (0.7f) : ui::line);
         g.drawRoundedRectangle (r.reduced (0.5f), 6.0f, down ? 1.5f : 1.0f);
 
         g.setColour (playable ? ui::text : ui::textDim.withAlpha (0.5f));
@@ -371,17 +376,17 @@ void PadGrid::release()
 // ============================================================================ keyboard
 void TintedKeyboard::drawWhiteNote (int n, Graphics& g, Rectangle<float> area, bool down, bool over, Colour lineCol, Colour)
 {
-    auto c = isKeyswitch (n) ? ui::violet.withSaturation (0.35f).brighter (0.5f)
-                             : inRange (n) ? Colour (0xffe8e0cf) : Colour (0xff5b5562);
+    auto c = isKeyswitch (n) ? ui::violet.withSaturation (0.45f).brighter (0.6f)
+                             : inRange (n) ? Colour (0xffeee3cf) : Colour (0xff4d566b);
     if (over) c = c.brighter (0.1f);
-    if (down) c = ui::gold;
+    if (down) c = ui::teal;
     g.setColour (c);
     g.fillRect (area);
     g.setColour (lineCol);
     g.fillRect (area.withWidth (1.0f));
     if (art != nullptr && art->hasRootAt (n))
     {
-        g.setColour (ui::teal.darker (0.2f));
+        g.setColour (Colour (0xff0f8fa0));
         g.fillEllipse (Rectangle<float> (5, 5).withCentre ({ area.getCentreX(), area.getBottom() - 8 }));
     }
     if (n % 12 == 0)
@@ -394,9 +399,9 @@ void TintedKeyboard::drawWhiteNote (int n, Graphics& g, Rectangle<float> area, b
 
 void TintedKeyboard::drawBlackNote (int n, Graphics& g, Rectangle<float> area, bool down, bool over, Colour)
 {
-    auto c = isKeyswitch (n) ? ui::violet.darker (0.4f) : inRange (n) ? Colour (0xff1c1724) : Colour (0xff2e2a33);
+    auto c = isKeyswitch (n) ? ui::violet.darker (0.4f) : inRange (n) ? Colour (0xff0b1220) : Colour (0xff27304a);
     if (over) c = c.brighter (0.2f);
-    if (down) c = ui::gold.darker (0.2f);
+    if (down) c = ui::teal.darker (0.3f);
     g.setColour (c);
     g.fillRect (area);
     if (art != nullptr && art->hasRootAt (n))

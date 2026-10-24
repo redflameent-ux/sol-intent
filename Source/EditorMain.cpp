@@ -135,14 +135,22 @@ void SolIntentEditor::paint (Graphics& g)
 {
     g.fillAll (ui::bg);
 
-    g.setColour (ui::gold);
+    g.setColour (ui::teal.withAlpha (0.25f));
     g.setFont (FontOptions (24.0f, Font::bold));
+    g.drawText ("SOL INTENT", 23, 15, 200, 30, Justification::centredLeft);
+    g.setColour (ui::text);
     g.drawText ("SOL INTENT", 22, 14, 200, 30, Justification::centredLeft);
     g.setColour (ui::textDim);
     g.setFont (FontOptions (11.5f));
     g.drawText ("resonance sampler", 168, 23, 130, 18, Justification::centredLeft);
 
-    auto panelBox = [&g] (Rectangle<int> r) { g.setColour (ui::panel); g.fillRoundedRectangle (r.toFloat(), 10.0f); };
+    auto panelBox = [&g] (Rectangle<int> r)
+    {
+        g.setColour (ui::panel);
+        g.fillRoundedRectangle (r.toFloat(), 10.0f);
+        g.setColour (ui::goldDim.withAlpha (0.55f));
+        g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 10.0f, 1.0f);
+    };
     panelBox (browserArea);
     panelBox (knobArea);
 
@@ -571,7 +579,7 @@ void SolIntentEditor::timerCallback()
         status = proc.getStatus();
     if (status.isEmpty())
         status = mapMode ? "Click a recording to edit it. Play a key, then Root = last key to set where it sits."
-                         : ui::u8 ("Teal dots mark keys with a real recording. Pitch bend reaches \xc2\xb1")
+                         : ui::u8 ("Cyan dots mark keys with a real recording. Pitch bend reaches \xc2\xb1")
                            + String ((int) proc.params.getRawParameterValue ("bendRange")->load())
                            + " semitones. Right-click any knob to link it to your controller.";
     if (statusLabel.getText() != status) statusLabel.setText (status, dontSendNotification);
