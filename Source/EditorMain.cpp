@@ -131,9 +131,47 @@ SolIntentEditor::~SolIntentEditor()
 }
 
 // ---------------------------------------------------------------------------- painting
+static Image makeStarField (int w, int h)
+{
+    Image img (Image::RGB, jmax (1, w), jmax (1, h), true);
+    Graphics g (img);
+    g.fillAll (ui::bg);
+
+    // faint nebula clouds
+    auto cloud = [&g] (float cx, float cy, float r, Colour c)
+    {
+        g.setGradientFill (ColourGradient (c, cx, cy, c.withAlpha (0.0f), cx + r, cy, true));
+        g.fillEllipse (cx - r, cy - r, r * 2, r * 2);
+    };
+    cloud ((float) w * 0.18f, (float) h * 0.25f, (float) w * 0.45f, Colour (0x445b2bd6));
+    cloud ((float) w * 0.80f, (float) h * 0.75f, (float) w * 0.40f, Colour (0x38b0308c));
+    cloud ((float) w * 0.55f, (float) h * 0.35f, (float) w * 0.30f, Colour (0x2a1c6fc9));
+    cloud ((float) w * 0.35f, (float) h * 0.90f, (float) w * 0.30f, Colour (0x26c27a2a));
+
+    // stars
+    Random rng (7);
+    for (int i = 0; i < (w * h) / 1500; ++i)
+    {
+        float x = rng.nextFloat() * (float) w, y = rng.nextFloat() * (float) h;
+        float b = std::pow (rng.nextFloat(), 3.0f);
+        float size = 0.6f + 1.6f * b;
+        auto tint = rng.nextFloat() < 0.15f ? ui::gold : rng.nextFloat() < 0.2f ? ui::teal : Colours::white;
+        if (b > 0.6f)
+        {
+            g.setColour (tint.withAlpha (0.12f));
+            g.fillEllipse (x - size * 2.5f, y - size * 2.5f, size * 5, size * 5);
+        }
+        g.setColour (tint.withAlpha (0.25f + 0.7f * b));
+        g.fillEllipse (x - size * 0.5f, y - size * 0.5f, size, size);
+    }
+    return img;
+}
+
 void SolIntentEditor::paint (Graphics& g)
 {
-    g.fillAll (ui::bg);
+    if (starField.getWidth() != getWidth() || starField.getHeight() != getHeight())
+        starField = makeStarField (getWidth(), getHeight());
+    g.drawImageAt (starField, 0, 0);
 
     g.setColour (ui::teal.withAlpha (0.25f));
     g.setFont (FontOptions (24.0f, Font::bold));

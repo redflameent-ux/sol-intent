@@ -273,7 +273,9 @@ void ResonanceView::paint (Graphics& g)
             if (i == 0) ring.startNewSubPath (pt); else ring.lineTo (pt);
         }
         ring.closeSubPath();
-        auto col = ui::teal.interpolatedWith (ui::gold, (float) (n % 12) / 11.0f * 0.6f);
+        const float hue = (float) (n % 12) / 11.0f;   // cyan -> violet -> gold around the octave
+        auto col = hue < 0.5f ? ui::teal.interpolatedWith (ui::violet, hue * 2.0f)
+                              : ui::violet.interpolatedWith (ui::gold, (hue - 0.5f) * 2.0f);
         g.setColour (col.withAlpha (0.10f + 0.15f * v));
         g.strokePath (ring, PathStrokeType (5.0f + 4.0f * v));
         g.setColour (col.withAlpha (0.35f + 0.6f * v));

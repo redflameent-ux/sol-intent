@@ -4,17 +4,18 @@
 
 namespace ui
 {
-    // Palette: deep night-sky navy, warm copper linework, glowing cyan energy, cream lettering.
-    const juce::Colour bg       { 0xff070d1a };
-    const juce::Colour panel    { 0xff0d1628 };
-    const juce::Colour panelHi  { 0xff132038 };
-    const juce::Colour line     { 0xff1f2f4b };
-    const juce::Colour gold     { 0xffd08a5c };   // copper
-    const juce::Colour goldDim  { 0xff8c5a3c };
-    const juce::Colour violet   { 0xff2f7bff };   // deep electric blue
+    // Palette: black star field with a faint violet nebula, amber-gold light, cyan glow, cream lettering.
+    // Panels are almost solid so the stars sit around them, not on top of the controls.
+    const juce::Colour bg       { 0xff05060c };
+    const juce::Colour panel    { 0xf40b0e1a };
+    const juce::Colour panelHi  { 0xff151a2d };
+    const juce::Colour line     { 0xff262c44 };
+    const juce::Colour gold     { 0xffe8a64c };   // amber gold
+    const juce::Colour goldDim  { 0xff9a6a35 };
+    const juce::Colour violet   { 0xffb45cff };   // magenta-violet
     const juce::Colour teal     { 0xff3fe6f2 };   // cyan glow
-    const juce::Colour text     { 0xfff0e4cf };   // cream
-    const juce::Colour textDim  { 0xff7f8aa3 };
+    const juce::Colour text     { 0xfff3e6cc };   // cream
+    const juce::Colour textDim  { 0xff8a8fa8 };
 
     juce::String u8 (const char*);   // UTF-8 literal helper
 
@@ -246,6 +247,7 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Rectangle<int> knobArea, leftArea, centreArea, browserArea;
     juce::Rectangle<int> sectionEnv, sectionMotion, sectionSound;
+    juce::Image starField;   // painted once per size
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SolIntentEditor)
 };
