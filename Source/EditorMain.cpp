@@ -480,8 +480,26 @@ void SolIntentEditor::paintListBoxItem (int row, Graphics& g, int w, int h, bool
     }
 }
 
-void SolIntentEditor::listBoxItemClicked (int row, const MouseEvent&)
+void SolIntentEditor::listBoxItemClicked (int row, const MouseEvent& e)
 {
+    if (row >= 0 && row < (int) rows.size() && ! rows[(size_t) row].header && e.mods.isPopupMenu())
+    {
+        const int index = rows[(size_t) row].index;
+        const auto info = proc.getInstrumentList()[(size_t) index];
+        PopupMenu m;
+        m.addSectionHeader (info.name);
+        m.addItem (1, "Load into layer " + SolIntentProcessor::layerLetter (proc.activeLayer));
+        m.addItem (2, "Show the folder", ! info.isDemo());
+        m.addSeparator();
+        m.addItem (3, "Remove from library...", ! info.isDemo());
+        m.showMenuAsync (PopupMenu::Options(), [this, index, info] (int r)
+        {
+            if (r == 1) { proc.selectInstrument (proc.activeLayer, index); browser.repaint(); }
+            if (r == 2) info.folder.revealToUser();
+            if (r == 3) removeInstrument (index);
+        });
+        return;
+    }
     if (row >= 0 && row < (int) rows.size() && ! rows[(size_t) row].header)
     {
         proc.selectInstrument (proc.activeLayer, rows[(size_t) row].index);
@@ -489,6 +507,42 @@ void SolIntentEditor::listBoxItemClicked (int row, const MouseEvent&)
         browser.repaint();
         if (mapMode) mapView.setTarget (proc.getLayerInfo (proc.activeLayer), 0);
     }
+}
+
+// Backspace / Delete on the selected instrument
+void SolIntentEditor::deleteKeyPressed (int lastRowSelected)
+{
+    if (lastRowSelected >= 0 && lastRowSelected < (int) rows.size() && ! rows[(size_t) lastRowSelected].header)
+        removeInstrument (rows[(size_t) lastRowSelected].index);
+}
+
+void SolIntentEditor::removeInstrument (int index)
+{
+    if (index < 0 || index >= (int) proc.getInstrumentList().size()) return;
+    const auto info = proc.getInstrumentList()[(size_t) index];
+    if (info.isDemo()) { proc.setStatus ("The built-in demo can't be removed."); return; }
+
+    auto* w = new AlertWindow ("Remove \"" + info.name + "\"?",
+                               "Its folder and the recordings in it go to the Trash, so you can get them back from there if you change your mind.",
+                               MessageBoxIconType::NoIcon);
+    w->addButton ("Move to Trash", 1, KeyPress (KeyPress::returnKey));
+    w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+    addAndMakeVisible (w);
+    w->centreAroundComponent (this, w->getWidth(), w->getHeight());
+    w->enterModalState (true, ModalCallbackFunction::create ([this, info] (int r)
+    {
+        if (r != 1) return;
+        for (int k = 0; k < SolIntentProcessor::numLayers; ++k)   // stop using it first
+            if (proc.getLayerInfo (k).folder == info.folder)
+                proc.clearLayer (k);
+        if (mapView.getTarget().folder == info.folder)
+            mapView.setTarget (proc.getLayerInfo (proc.activeLayer), 0);
+        const bool ok = info.folder.moveToTrash();
+        proc.rescanLibrary();
+        refreshList();
+        proc.setStatus (ok ? "Moved \"" + info.name + "\" to the Trash."
+                           : "Couldn't move \"" + info.name + "\" to the Trash - it may be open in another program.");
+    }), true);
 }
 
 void SolIntentEditor::chooseLibraryFolder()
@@ -535,26 +589,38 @@ void SolIntentEditor::filesDropped (const StringArray& files, int, int)
     dragging = false;
     repaint();
     auto target = proc.getLayerInfo (proc.activeLayer);
-    if (! target.isDemo() && target.folder.isDirectory())
-    {
-        showMap (true);
-        mapView.addFiles (files);
-        return;
-    }
-
-    // dropping onto the demo makes a new instrument, named after the dropped folder if there is one
     File first (files[0]);
     auto suggested = first.isDirectory() ? first.getFileName() : first.getParentDirectory().getFileName();
-    askName (this, "Name the new instrument", suggested, [this, files] (String name)
+
+    auto makeNew = [this, files, suggested]
     {
-        if (name.isEmpty()) return;
-        auto folder = sol::Library::createInstrument (name);
-        proc.loadFolderIntoLayer (proc.activeLayer, folder);
-        refreshList();
-        showMap (true);
-        mapView.setTarget (proc.getLayerInfo (proc.activeLayer), 0);
-        mapView.addFiles (files);
-    });
+        askName (this, "Name the new instrument", suggested, [this, files] (String name)
+        {
+            if (name.isEmpty()) return;
+            auto folder = sol::Library::createInstrument (name);
+            proc.loadFolderIntoLayer (proc.activeLayer, folder);
+            proc.params.getParameter (SolIntentProcessor::layerParam (proc.activeLayer, "On"))->setValueNotifyingHost (1.0f);
+            refreshList();
+            showMap (true);
+            mapView.setTarget (proc.getLayerInfo (proc.activeLayer), 0);
+            mapView.importWithChoice (files);
+        });
+    };
+
+    if (target.isDemo() || ! target.folder.isDirectory()) { makeNew(); return; }
+
+    // an instrument of yours is loaded: make sure the drop goes where it's meant to
+    auto* w = new AlertWindow ("Where should these go?", {}, MessageBoxIconType::NoIcon);
+    w->addButton ("New instrument", 1, KeyPress (KeyPress::returnKey));
+    w->addButton ("Add to " + target.name, 2);
+    w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+    addAndMakeVisible (w);
+    w->centreAroundComponent (this, w->getWidth(), w->getHeight());
+    w->enterModalState (true, ModalCallbackFunction::create ([this, files, makeNew] (int r)
+    {
+        if (r == 1) makeNew();
+        if (r == 2) { showMap (true); mapView.importWithChoice (files); }
+    }), true);
 }
 
 // ---------------------------------------------------------------------------- presets

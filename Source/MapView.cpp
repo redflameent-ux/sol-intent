@@ -79,7 +79,7 @@ MapView::MapView (SolIntentProcessor& p) : proc (p)
                               {
                                   StringArray paths;
                                   for (auto& f : fc.getResults()) paths.add (f.getFullPathName());
-                                  if (! paths.isEmpty()) addFiles (paths);
+                                  if (! paths.isEmpty()) importWithChoice (paths);
                               });
     };
 
@@ -157,15 +157,24 @@ MapView::MapView (SolIntentProcessor& p) : proc (p)
             Timer::callAfterDelay (300, [this, n] { proc.keyboardState.noteOff (1, n, 0.0f); });
         }
     };
-    autoRanges.setTooltip ("Spread each recording across the keys up to halfway to its neighbours.");
+    autoRanges.setTooltip ("Reset the key range of every recording in this articulation.");
     autoRanges.onClick = [this]
     {
-        if (auto* a = currentArt())
+        PopupMenu m;
+        m.addItem (1, "One key each - played exactly as recorded (drums, one-shots)");
+        m.addItem (2, "Spread across nearby keys - re-pitched (tuned bowls, chimes)");
+        m.showMenuAsync (PopupMenu::Options().withTargetComponent (&autoRanges), [this] (int r)
         {
-            for (auto& z : a->zones) z.lo = z.hi = -1;
+            auto* a = currentArt();
+            if (a == nullptr || r == 0) return;
+            for (auto& z : a->zones)
+            {
+                if (r == 1) z.lo = z.hi = z.root;
+                else        z.lo = z.hi = -1;
+            }
             sol::Library::fillAutoRanges (*a);
             changed(); refreshControls();
-        }
+        });
     };
     removeZone.onClick = [this]
     {
@@ -221,7 +230,45 @@ void MapView::timerCallback()
     proc.reloadLayersUsing (info.folder);
 }
 
-void MapView::addFiles (const StringArray& paths)
+// Asks how the recordings should sit on the keyboard, suggesting the likely answer.
+void MapView::importWithChoice (const StringArray& paths)
+{
+    if (! editable) return;
+    Array<File> all;
+    for (auto& p : paths)
+    {
+        File f (p);
+        if (f.isDirectory()) all.addArray (f.findChildFiles (File::findFiles, true));
+        else all.add (f);
+    }
+    const bool named = sol::Library::anyNamedNotes (all);
+
+    auto* top = findParentComponentOfClass<AudioProcessorEditor>();
+    auto* w = new AlertWindow ("How should these play?",
+                               named ? "Some file names have notes in them (like C3), so they look like tuned recordings."
+                                     : "The file names have no notes in them, so they look like drums or one-shots.",
+                               MessageBoxIconType::NoIcon);
+    // the suggested choice goes first and answers the Return key
+    if (named)
+    {
+        w->addButton ("Tuned: spread across keys", 2, KeyPress (KeyPress::returnKey));
+        w->addButton ("One key each", 1);
+    }
+    else
+    {
+        w->addButton ("One key each (drums)", 1, KeyPress (KeyPress::returnKey));
+        w->addButton ("Spread across keys", 2);
+    }
+    w->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+    if (top != nullptr) { top->addAndMakeVisible (w); w->centreAroundComponent (top, w->getWidth(), w->getHeight()); }
+    w->enterModalState (true, ModalCallbackFunction::create ([this, paths, named] (int r)
+    {
+        if (r == 1) addFiles (paths, sol::Library::ImportMode::OnePerKey);
+        if (r == 2) addFiles (paths, named ? sol::Library::ImportMode::Auto : sol::Library::ImportMode::Spread);
+    }), true);
+}
+
+void MapView::addFiles (const StringArray& paths, sol::Library::ImportMode mode)
 {
     if (! editable) return;
 
@@ -260,9 +307,14 @@ void MapView::addFiles (const StringArray& paths)
         return out;
     };
 
-    auto merge = [] (sol::ArticulationSpec& a, const sol::ArticulationSpec& added)
+    int lowest = 127, highest = 0;
+    auto merge = [&lowest, &highest] (sol::ArticulationSpec& a, const sol::ArticulationSpec& added)
     {
-        for (auto z : added.zones) { z.lo = z.hi = -1; a.zones.push_back (z); }
+        for (auto z : added.zones)
+        {
+            lowest = jmin (lowest, z.root); highest = jmax (highest, z.root);
+            a.zones.push_back (z);
+        }
         std::stable_sort (a.zones.begin(), a.zones.end(), [] (auto& x, auto& y) { return x.root < y.root; });
         sol::Library::fillAutoRanges (a);
     };
@@ -274,20 +326,23 @@ void MapView::addFiles (const StringArray& paths)
         std::vector<int> taken;
         for (auto& z : a->zones) taken.push_back (z.root);
         auto files = copyIn (a->name, loose);
-        merge (*a, sol::Library::autoMapFiles (a->name, info.folder, files, taken));
+        merge (*a, sol::Library::autoMapFiles (a->name, info.folder, files, taken, mode));
         added += files.size();
     }
     for (auto& [name, files] : newArts)
     {
         auto copied = copyIn (name, files);
         sol::ArticulationSpec a { name, {} };
-        merge (a, sol::Library::autoMapFiles (name, info.folder, copied));
+        merge (a, sol::Library::autoMapFiles (name, info.folder, copied, {}, mode));
         spec.articulations.push_back (a);
         added += copied.size();
     }
 
-    proc.setStatus ("Added " + String (added) + (added == 1 ? " recording" : " recordings")
-                    + ". Check the root notes - click a recording, play its note, press Root = last key.");
+    if (added > 0)
+        proc.setStatus ("Put " + String (added) + (added == 1 ? " recording" : " recordings") + " on "
+                        + (lowest == highest ? sol::noteName (lowest) : sol::noteName (lowest) + " to " + sol::noteName (highest))
+                        + (mode == sol::Library::ImportMode::OnePerKey ? ", one key each. " : ". ")
+                        + "Their names show on the pads. Click one in the list to move it.");
     changed();
     refreshArticulationBox();
     refreshControls();
@@ -382,6 +437,8 @@ void MapView::paintListBoxItem (int row, Graphics& g, int w, int h, bool sel)
 }
 
 void MapView::listBoxItemClicked (int row, const MouseEvent&) { selected = row; refreshControls(); }
+
+void MapView::deleteKeyPressed (int) { if (removeZone.isEnabled()) removeZone.onClick(); }
 
 Rectangle<int> MapView::mapArea() const
 {

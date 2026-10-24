@@ -235,12 +235,20 @@ void Library::fillAutoRanges (ArticulationSpec& art)
     }
 }
 
-ArticulationSpec Library::autoMapFiles (const juce::String& name, const juce::File& instFolder, const juce::Array<juce::File>& files, const std::vector<int>& takenKeys)
+bool Library::anyNamedNotes (const juce::Array<juce::File>& files)
+{
+    for (auto& f : files)
+        if (parseNoteFromName (f.getFileNameWithoutExtension()) >= 0) return true;
+    return false;
+}
+
+ArticulationSpec Library::autoMapFiles (const juce::String& name, const juce::File& instFolder, const juce::Array<juce::File>& files,
+                                       const std::vector<int>& takenKeys, ImportMode mode)
 {
     ArticulationSpec art;
     art.name = name;
 
-    struct Parsed { juce::File file; int note, vel; };
+    struct Parsed { juce::File file; int note, vel; bool named; };
     std::vector<Parsed> parsed;
     juce::Array<juce::File> unnamed;
 
@@ -250,7 +258,7 @@ ArticulationSpec Library::autoMapFiles (const juce::String& name, const juce::Fi
         int note = parseNoteFromName (base);
         int vel = parseTag (base, "(^|[^A-Za-z])(?:v|V|vel|Vel|VEL)([0-9]+)");
         if (note < 0) unnamed.add (f);
-        else          parsed.push_back ({ f, note, vel });
+        else          parsed.push_back ({ f, note, vel, true });
     }
 
     int nextKey = 60;   // no note in the name: one per key from C3 up
@@ -262,7 +270,7 @@ ArticulationSpec Library::autoMapFiles (const juce::String& name, const juce::Fi
             return std::find (takenKeys.begin(), takenKeys.end(), k) != takenKeys.end();
         };
         while (taken (nextKey) && nextKey < 127) ++nextKey;
-        parsed.push_back ({ f, nextKey++, -1 });
+        parsed.push_back ({ f, nextKey++, -1, false });
     }
 
     std::map<int, std::vector<int>> velsPerNote;   // v1, v2, v3 ... split 0-127 evenly
@@ -275,6 +283,8 @@ ArticulationSpec Library::autoMapFiles (const juce::String& name, const juce::Fi
         ZoneSpec z;
         z.file = p.file.getRelativePathFrom (instFolder).replaceCharacter ('\\', '/');
         z.root = p.note;
+        const bool spread = mode == ImportMode::Spread || (mode == ImportMode::Auto && p.named);
+        if (! spread) z.lo = z.hi = p.note;   // its own key only, exactly as recorded
         if (p.vel >= 0)
         {
             auto& layers = velsPerNote[p.note];

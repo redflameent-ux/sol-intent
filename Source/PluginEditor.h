@@ -146,13 +146,15 @@ public:
 
     void setTarget (const sol::InstrumentInfo&, int articulation);
     const sol::InstrumentInfo& getTarget() const { return info; }
-    void addFiles (const juce::StringArray& paths);
+    void importWithChoice (const juce::StringArray& paths);   // asks drums vs tuned, then adds
+    void addFiles (const juce::StringArray& paths, sol::Library::ImportMode);
     void refreshLastKey();
 
 private:
     int getNumRows() override;
     void paintListBoxItem (int row, juce::Graphics&, int w, int h, bool selected) override;
     void listBoxItemClicked (int row, const juce::MouseEvent&) override;
+    void deleteKeyPressed (int lastRowSelected) override;
     void timerCallback() override;
 
     sol::ArticulationSpec* currentArt();
@@ -178,7 +180,7 @@ private:
     juce::ListBox zoneList { "Zones", this };
     juce::Slider root, lo, hi, velLo, velHi, gain;
     juce::Label rootL, loL, hiL, velLoL, velHiL, gainL;
-    juce::TextButton setRoot { "Root = last key" }, playZone { "Play" }, autoRanges { "Auto ranges" }, removeZone { "Remove" };
+    juce::TextButton setRoot { "Root = last key" }, playZone { "Play" }, autoRanges { "Key ranges..." }, removeZone { "Remove" };
     std::unique_ptr<juce::FileChooser> chooser;
 };
 
@@ -202,6 +204,8 @@ private:
     int getNumRows() override;
     void paintListBoxItem (int row, juce::Graphics&, int w, int h, bool selected) override;
     void listBoxItemClicked (int row, const juce::MouseEvent&) override;
+    void deleteKeyPressed (int lastRowSelected) override;
+    void removeInstrument (int indexInList);
     void timerCallback() override;
     void refreshList();
     void refreshInstrumentViews();

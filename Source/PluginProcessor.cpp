@@ -378,6 +378,17 @@ void SolIntentProcessor::reloadLayersUsing (const juce::File& folder)
             queueLoad (i, layers[(size_t) i].info);
 }
 
+void SolIntentProcessor::clearLayer (int layerIndex)
+{
+    auto& l = layers[(size_t) layerIndex];
+    l.info = {};
+    l.articulation = 0;
+    auto empty = std::make_shared<sol::Instrument>();
+    empty->name = "Empty";
+    hand (layerIndex, empty, {}, ++l.generation);
+    params.getParameter (layerParam (layerIndex, "On"))->setValueNotifyingHost (0.0f);
+}
+
 sol::InstrumentInfo SolIntentProcessor::getLayerInfo (int layer) const { return layers[(size_t) layer].info; }
 
 void SolIntentProcessor::queueLoad (int layerIndex, const sol::InstrumentInfo& info)
@@ -539,6 +550,11 @@ void SolIntentProcessor::applyState (const juce::ValueTree& state)
         int i = lt["index"];
         if (i < 0 || i >= numLayers) continue;
         auto name = lt["name"].toString();
+        if (name.isEmpty() && lt["folder"].toString().isEmpty())   // an empty slot
+        {
+            if (layers[(size_t) i].info.name.isNotEmpty()) clearLayer (i);
+            continue;
+        }
         juce::File folder (lt["folder"].toString());
         auto rel = lt["relative"].toString();
 

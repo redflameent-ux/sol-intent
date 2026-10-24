@@ -338,8 +338,17 @@ void PadGrid::paint (Graphics& g)
         g.setColour (ui::textDim.withAlpha (0.7f));
         g.setFont (FontOptions (10.0f));
         g.drawText (String (i + 1), r.reduced (8, 6), Justification::topLeft);
-        if (recorded)   // a real recording lives on this pad
+        if (recorded)   // a real recording lives on this pad: show which one
         {
+            for (auto& z : art->zones)
+                if (z.rootNote == note)
+                {
+                    auto label = File::createFileWithoutCheckingPath (z.fileName).getFileNameWithoutExtension();
+                    g.setColour (ui::text.withAlpha (0.75f));
+                    g.setFont (FontOptions (10.5f));
+                    g.drawFittedText (label, r.reduced (8, 18).toNearestInt(), Justification::centredLeft, 2, 0.8f);
+                    break;
+                }
             g.setColour (ui::teal);
             g.fillEllipse (Rectangle<float> (6, 6).withCentre ({ r.getRight() - 10, r.getY() + 10 }));
         }

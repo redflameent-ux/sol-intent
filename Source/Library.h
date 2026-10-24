@@ -104,9 +104,18 @@ namespace Library
     InstrumentPtr load (const InstrumentInfo&, juce::AudioFormatManager&, juce::String& errorOut);
     InstrumentPtr makeDemoBowl();
 
+    // How recordings are laid on the keyboard when imported:
+    //  Auto      - files with a note in the name spread across nearby keys (re-pitched);
+    //              files without one get one key each, played exactly as recorded
+    //  OnePerKey - every file gets exactly one key, never re-pitched (drums, chimes, one-shots)
+    //  Spread    - every file spreads across nearby keys (tuned recordings)
+    enum class ImportMode { Auto, OnePerKey, Spread };
+
     // maps files by their names; files with no note go on free keys from C3 up
     ArticulationSpec autoMapFiles (const juce::String& name, const juce::File& instFolder,
-                                   const juce::Array<juce::File>& files, const std::vector<int>& takenKeys = {});
+                                   const juce::Array<juce::File>& files, const std::vector<int>& takenKeys = {},
+                                   ImportMode mode = ImportMode::Auto);
+    bool anyNamedNotes (const juce::Array<juce::File>& files);   // does any file name contain a note?
     juce::Array<juce::File> audioFilesIn (const juce::File& folder);
 
     // makes "Library/<name>" with an empty mapping; returns the folder

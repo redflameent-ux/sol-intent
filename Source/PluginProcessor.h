@@ -49,6 +49,7 @@ public:
     void selectInstrument (int layer, int indexInList);
     void loadFolderIntoLayer (int layer, const juce::File& folder);
     void reloadLayersUsing (const juce::File& folder);       // after the MAP screen saves
+    void clearLayer (int layer);                             // empty the slot and switch it off
     int  findInList (const juce::File& folder) const;
     sol::InstrumentInfo getLayerInfo (int layer) const;
     sol::InstrumentPtr getDisplayInstrument (int layer);

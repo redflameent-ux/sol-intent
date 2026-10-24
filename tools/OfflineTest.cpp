@@ -142,6 +142,21 @@ int main (int argc, char** argv)
     }
     auto koshi = sol::Library::load (list[(size_t) iKoshi], fm, err);
     CHECK (koshi != nullptr && koshi->get (0)->hasRootAt (60) && koshi->get (0)->hasRootAt (61), "unnamed one-shots go on C3, C#3");
+    if (koshi != nullptr)
+    {
+        CHECK (koshi->get (0)->findZone (62, 100, 0) == nullptr && koshi->get (0)->findZone (59, 100, 0) == nullptr,
+               "unnamed one-shots stay on their own key (no re-pitched copies on neighbours)");
+        auto spread = sol::Library::autoMapFiles ("x", root.getChildFile ("Koshi Chimes/Koshi Terra"),
+                                                  sol::Library::audioFilesIn (root.getChildFile ("Koshi Chimes/Koshi Terra")), {},
+                                                  sol::Library::ImportMode::Spread);
+        CHECK (spread.zones.size() == 2 && spread.zones[0].lo == -1, "Spread mode lets them cover nearby keys");
+        auto named = sol::Library::autoMapFiles ("x", root.getChildFile ("Test Bowls"),
+                                                 sol::Library::audioFilesIn (root.getChildFile ("Test Bowls")), {},
+                                                 sol::Library::ImportMode::OnePerKey);
+        bool allSingle = true;
+        for (auto& z : named.zones) allSingle = allSingle && z.lo == z.root && z.hi == z.root;
+        CHECK (allSingle, "One-key-each mode keeps even named notes on one key");
+    }
 
     std::cout << "Playback\n";
     sol::Library::setLibraryFolder (root);
@@ -351,6 +366,19 @@ int main (int argc, char** argv)
         CHECK (p.loadPreset (presetFile) && std::abs (p.params.getParameter ("tone")->getValue() - 0.2f) < 0.01f, "preset loads the knob back");
         CHECK (p.getLearnedCC ("reverbMix") == 21, "loading a preset keeps your MIDI controller links");
         presetFile.deleteFile();
+
+        // removing an instrument: layers using it are emptied, and an empty slot reopens empty
+        p.loadNow (2, { "My Koshi", "Library", made });
+        p.clearLayer (2);
+        CHECK (p.getDisplayInstrument (2) != nullptr && p.getDisplayInstrument (2)->name == "Empty"
+               && p.params.getParameter ("cOn")->getValue() < 0.5f, "clearing a layer empties it and switches it off");
+        MemoryBlock st; p.getStateInformation (st);
+        SolIntentProcessor p3; p3.setStateInformation (st.getData(), (int) st.getSize());
+        for (int i = 0; i < 200 && p3.isLoading(); ++i) Thread::sleep (10);
+        CHECK (p3.getLayerInfo (2).name.isEmpty(), "an empty layer stays empty when the project reopens");
+       #if ! JUCE_LINUX   // the test machine has no Trash; Mac and Windows use the real Trash / Recycle Bin
+        CHECK (made.moveToTrash() || ! made.exists(), "instrument folder can be moved to the Trash");
+       #endif
         made.deleteRecursively();
     }
 
