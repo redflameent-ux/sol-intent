@@ -1,4 +1,4 @@
-# Sol Intent
+# Sol Intent: Sonic Alchemy Sampler
 
 A playable, expandable library for recorded sound-healing instruments: singing bowls, Koshi chimes,
 frame drums and whatever gets recorded next. VST3 + stand-alone on Windows, AU + VST3 + stand-alone on Mac.

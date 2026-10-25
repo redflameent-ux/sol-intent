@@ -91,7 +91,7 @@ jobs:
           codesign --force --deep -s - "$ROOT/Library/Audio/Plug-Ins/Components/Sol Intent.component"
           codesign --force --deep -s - "$ROOT/Library/Audio/Plug-Ins/VST3/Sol Intent.vst3"
           codesign --force --deep -s - "$ROOT/Applications/Sol Intent.app"
-          pkgbuild --root "$ROOT" --identifier com.solintent.sampler --version 0.1.0 --install-location / Sol-Intent-Mac.pkg
+          pkgbuild --root "$ROOT" --identifier com.solintent.sampler --version 0.11.0 --install-location / Sol-Intent-Mac.pkg
           (cd "$ROOT/Library/Audio/Plug-Ins" && zip -qry "$GITHUB_WORKSPACE/Sol-Intent-Mac.zip" "Components/Sol Intent.component" "VST3/Sol Intent.vst3")
 
       - name: Check the AU passes Apple's validator

@@ -177,9 +177,9 @@ static Image makeStarField (int w, int h)
         g.setGradientFill (ColourGradient (c, cx, cy, c.withAlpha (0.0f), cx + r, cy, true));
         g.fillEllipse (cx - r, cy - r, r * 2, r * 2);
     };
-    cloud ((float) w * 0.18f, (float) h * 0.25f, (float) w * 0.45f, Colour (0x404b3bd6));
+    cloud ((float) w * 0.18f, (float) h * 0.25f, (float) w * 0.45f, Colour (0x36207a48));
     cloud ((float) w * 0.80f, (float) h * 0.75f, (float) w * 0.40f, Colour (0x341f8a4a));
-    cloud ((float) w * 0.55f, (float) h * 0.35f, (float) w * 0.30f, Colour (0x2a1c7a52));
+    cloud ((float) w * 0.55f, (float) h * 0.35f, (float) w * 0.30f, Colour (0x283b2fc0));
     cloud ((float) w * 0.35f, (float) h * 0.90f, (float) w * 0.30f, Colour (0x26c28a2a));
 
     // stars
@@ -215,9 +215,9 @@ void SolIntentEditor::paint (Graphics& g)
         logoBox.setWidth (logoBox.getHeight() * (float) logo.getWidth() / (float) logo.getHeight());
         g.drawImage (logo, logoBox, RectanglePlacement::centred);
     }
-    g.setColour (ui::textDim);
-    g.setFont (FontOptions (11.5f));
-    g.drawText ("resonance sampler", (int) logoBox.getRight() + 12, 34, 130, 18, Justification::centredLeft);
+    g.setColour (ui::gold.withAlpha (0.8f));
+    g.setFont (FontOptions (11.0f, Font::bold).withKerningFactor (0.18f));
+    g.drawText ("SONIC ALCHEMY SAMPLER", (int) logoBox.getRight() + 14, 34, 220, 18, Justification::centredLeft);
 
     auto panelBox = [&g] (Rectangle<int> r)
     {

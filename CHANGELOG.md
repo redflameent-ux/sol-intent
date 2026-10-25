@@ -1,6 +1,11 @@
-# Sol Intent changelog
+# Sol Intent: Sonic Alchemy Sampler, changelog
 
 Newest changes first. Every build is on the [Releases page](../../releases/tag/latest).
+
+## 0.11 (25 Oct 2026): Full name
+- The full name, Sol Intent: Sonic Alchemy Sampler, now shows beside the logo, in the Windows installer and in the read-me.
+- The background glow leans green instead of blue, with indigo kept as a small accent.
+- In music programs the plugin is still listed as "Sol Intent", so it fits in the plugin menus and existing projects keep finding it.
 
 ## 0.10 (25 Oct 2026): Logo and new colours
 - The Sol Intent logo now sits large in the top left of the plugin.
