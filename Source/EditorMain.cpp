@@ -1,6 +1,5 @@
 // The main window: header with presets, layer slots + library on the left, PLAY / MAP in the middle,
 // sound shaping on the right, keyboard along the bottom.
-#include <BinaryData.h>
 #include "PluginEditor.h"
 
 using namespace juce;
@@ -155,7 +154,7 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
 
     refreshList();
     showView (0);
-    setSize (1200, 798);
+    setSize (1200, 816);
     startTimerHz (30);
 }
 
@@ -209,8 +208,8 @@ void SolIntentEditor::paint (Graphics& g)
     g.drawImageAt (starField, 0, 0);
 
     // logo, top left
-    static const Image logo = ImageCache::getFromMemory (BinaryData::logo_png, BinaryData::logo_pngSize);
-    auto logoBox = Rectangle<float> (16.0f, 3.0f, 0.0f, 62.0f);
+    auto& logo = ui::logo();
+    auto logoBox = Rectangle<float> (16.0f, 4.0f, 0.0f, 80.0f);
     if (logo.isValid())
     {
         logoBox.setWidth (logoBox.getHeight() * (float) logo.getWidth() / (float) logo.getHeight());
@@ -218,7 +217,7 @@ void SolIntentEditor::paint (Graphics& g)
     }
     g.setColour (ui::textDim);
     g.setFont (FontOptions (11.5f));
-    g.drawText ("resonance sampler", (int) logoBox.getRight() + 12, 26, 130, 18, Justification::centredLeft);
+    g.drawText ("resonance sampler", (int) logoBox.getRight() + 12, 34, 130, 18, Justification::centredLeft);
 
     auto panelBox = [&g] (Rectangle<int> r)
     {
@@ -265,7 +264,7 @@ void SolIntentEditor::resized()
     auto area = getLocalBounds().reduced (14);
 
     // header
-    auto top = area.removeFromTop (52).withTrimmedTop (8).withHeight (32);
+    auto top = area.removeFromTop (70).withTrimmedTop (16).withHeight (32);
     stopButton.setBounds (top.removeFromRight (78));
     top.removeFromRight (6);
     rescanButton.setBounds (top.removeFromRight (72));

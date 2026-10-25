@@ -3,7 +3,8 @@
 Newest changes first. Every build is on the [Releases page](../../releases/tag/latest).
 
 ## 0.10 (25 Oct 2026): Logo and new colours
-- The Sol Intent logo now sits in the top left of the plugin.
+- The Sol Intent logo now sits large in the top left of the plugin.
+- When nothing is playing, the logo glows softly in the middle of the ring. It fades away on the first note and comes back after a moment of quiet.
 - The sun from the logo is the app icon for the standalone version.
 - New colours to match the logo: gold, emerald green and black, with indigo as an accent.
 - The circle-of-fifths colours (ring display and ROLL lines) now run from green through gold, with indigo as an accent.

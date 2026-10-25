@@ -1,3 +1,4 @@
+#include <BinaryData.h>
 #include "PluginEditor.h"
 #include <cmath>
 
@@ -366,6 +367,12 @@ void ParamKnob::refreshLearnState()
 }
 
 // ============================================================================ ripple display
+const Image& ui::logo()
+{
+    static const Image img = ImageCache::getFromMemory (BinaryData::logo_png, BinaryData::logo_pngSize);
+    return img;
+}
+
 static Colour fifthsColour (int n)
 {
     const float hue = (float) (((n % 12) * 7) % 12) / 11.0f;   // emerald -> gold -> indigo around the circle of fifths
@@ -417,6 +424,13 @@ void ResonanceView::tick()
     if (deepest > breathIn) breathIn += (deepest - breathIn) * jmin (1.0f, dt * 2.0f);
     else                    breathIn += (deepest - breathIn) * jmin (1.0f, dt * 6.0f);
     if (deepest > 0.0f) breathCol = breathCol.interpolatedWith (deepestCol, jmin (1.0f, dt * 3.0f));
+
+    // the logo shows in the ring once everything has been quiet for a moment, and gets out of the way on the first note
+    float glow = deepest;
+    for (auto& v : proc.noteGlow) glow = jmax (glow, v.load (std::memory_order_relaxed));
+    if (glow > 0.02f || ! exhales.empty()) quietFor = 0.0f; else quietFor += dt;
+    if (quietFor > 1.2f) idle = jmin (1.0f, idle + dt / 1.8f);
+    else                 idle = jmax (0.0f, idle - dt / 0.25f);
 
     for (auto& s : specks)
     {
@@ -547,12 +561,24 @@ void ResonanceView::paint (Graphics& g)
         g.fillEllipse (Rectangle<float> (s.size, s.size).withCentre (p));
     }
 
-    g.setColour (ui::text);
-    g.setFont (FontOptions (19.0f, Font::bold));
-    g.drawFittedText (title, Rectangle<float> (R * 1.6f, 24).withCentre ({ c.x, c.y - 8 }).toNearestInt(), Justification::centred, 1);
-    g.setColour (ui::textDim);
+    // resting: the logo glows softly in the middle of the ring and the instrument name slides below it
+    const float rest = idle * idle * (3.0f - 2.0f * idle);   // smooth fade
+    auto& logo = ui::logo();
+    if (rest > 0.01f && logo.isValid())
+    {
+        const float w = R * 1.25f, h = w * (float) logo.getHeight() / (float) logo.getWidth();
+        const float pulse = 0.88f + 0.12f * std::sin (phase * 0.6f);
+        g.setOpacity (rest * pulse);
+        g.drawImage (logo, Rectangle<float> (w, h).withCentre ({ c.x, c.y - R * 0.12f }), RectanglePlacement::centred);
+        g.setOpacity (1.0f);
+    }
+    const float textY = c.y + rest * R * 0.48f;
+    g.setColour (ui::text.withAlpha (1.0f - 0.25f * rest));
+    g.setFont (FontOptions (19.0f - 5.0f * rest, Font::bold));
+    g.drawFittedText (title, Rectangle<float> (R * 1.6f, 24).withCentre ({ c.x, textY - 8 }).toNearestInt(), Justification::centred, 1);
+    g.setColour (ui::textDim.withAlpha (1.0f - rest));
     g.setFont (FontOptions (12.0f));
-    g.drawText (subtitle, Rectangle<float> (b.getWidth(), 18).withCentre ({ c.x, c.y + 14 }), Justification::centred);
+    g.drawText (subtitle, Rectangle<float> (b.getWidth(), 18).withCentre ({ c.x, textY + 14 }), Justification::centred);
 }
 
 // ============================================================================ pads

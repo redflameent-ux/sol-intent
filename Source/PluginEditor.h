@@ -20,6 +20,7 @@ namespace ui
     const juce::Colour textDim  { 0xff8a9a8c };
 
     juce::String u8 (const char*);   // UTF-8 literal helper
+    const juce::Image& logo();       // the Sol Intent logo (transparent background)
 
     struct Look : juce::LookAndFeel_V4
     {
@@ -86,6 +87,7 @@ private:
     std::vector<Speck> specks;
     std::vector<Exhale> exhales;
     float breathIn = 0.0f;               // how much light is gathered in the centre (0..1)
+    float idle = 1.0f, quietFor = 10.0f; // the logo fades into the ring when nothing has sounded for a moment
     juce::Colour breathCol { 0xff4fe08a };
     double lastTick = 0.0;
     juce::Random rng;

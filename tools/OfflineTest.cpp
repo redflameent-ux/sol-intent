@@ -52,6 +52,14 @@ static int snapshot (const File& png)
     AudioBuffer<float> out (2, 512);
     MidiBuffer m;
     p.processBlock (out, m);
+    {   // resting: nothing playing, the logo sits in the ring
+        MessageManager::getInstance()->runDispatchLoopUntil (400);
+        auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+        auto f = png.getSiblingFile (png.getFileNameWithoutExtension() + "_rest.png");
+        f.deleteFile();
+        FileOutputStream os (f);
+        PNGImageFormat().writeImageToStream (img, os);
+    }
     for (int n : { 48, 55, 60, 64, 71 }) m.addEvent (MidiMessage::noteOn (1, n, (uint8) 100), 0);
     for (int b = 0; b < 60; ++b) { p.processBlock (out, m); m.clear(); }
     p.keyboardState.noteOn (1, 64, 1.0f);
