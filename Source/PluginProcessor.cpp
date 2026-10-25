@@ -161,6 +161,7 @@ void SolIntentProcessor::prepareToPlay (double sampleRate, int block)
     reverb.setSampleRate (sampleRate);
     reverb.reset();
     eq.prepare (rate);
+    roll.prepare (rate);
     lfoPhase = lfoPhase2 = 0.0f;
     chorus.prepare (rate);
     echo.prepare (rate);
@@ -214,8 +215,10 @@ void SolIntentProcessor::handleMidi (juce::MidiBuffer& in, juce::MidiBuffer& out
             }
         }
 
-        if (m.isChannelPressure()) aftertouch = m.getChannelPressureValue() / 127.0f;
-        if (m.isAftertouch())      aftertouch = m.getAfterTouchValue() / 127.0f;
+        // the Aftertouch mod source follows a normal keyboard (channel 1); pressure on
+        // MPE channels 2-16 shapes each note on its own instead
+        if (m.isChannelPressure() && m.getChannel() == 1) aftertouch = m.getChannelPressureValue() / 127.0f;
+        if (m.isAftertouch() && m.getChannel() == 1)      aftertouch = m.getAfterTouchValue() / 127.0f;
 
         if (ksBase >= 0 && (m.isNoteOn() || m.isNoteOff()) && m.getNoteNumber() >= ksBase && m.getNoteNumber() < ksBase + maxArts)
         {
@@ -260,6 +263,7 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         reverb.reset();
     }
 
+    roll.process (midi, n, getPlayHead(), (int) P.bend->load());   // the ROLL page's notes, in time with the host
     keyboardState.processNextMidiBuffer (midi, 0, n, true);   // pads and on-screen keys join the incoming MIDI
     handleMidi (midi, filtered);
 
@@ -890,6 +894,8 @@ juce::ValueTree SolIntentProcessor::makeState()
     state.appendChild (macros, nullptr);
     state.removeChild (state.getChildWithName ("Mods"), nullptr);
     state.appendChild (modsTree(), nullptr);
+    state.removeChild (state.getChildWithName ("Roll"), nullptr);
+    state.appendChild (roll.getPattern()->toTree(), nullptr);
     state.setProperty ("padBase", padBaseNote, nullptr);
     state.setProperty ("preset", currentPresetName, nullptr);
     return state;
@@ -920,6 +926,8 @@ void SolIntentProcessor::applyState (const juce::ValueTree& state)
         }
     }
     applyModsTree (state);
+    if (auto rt = state.getChildWithName ("Roll"); rt.isValid())
+        roll.setPattern (sol::roll::Pattern::fromTree (rt));
     for (auto& v : lastMacro) v = -1.0f;   // linked knobs follow the macros again
     for (int m = 0; m < numMacros; ++m) lastMacro[(size_t) m] = params.getParameter ("macro" + juce::String (m + 1))->getValue();
 
@@ -982,6 +990,7 @@ bool SolIntentProcessor::savePreset (const juce::String& name)
     currentPresetName = clean;
     auto state = makeState();
     state.removeChild (state.getChildWithName ("MidiMap"), nullptr);   // controller setup stays with the project
+    state.removeChild (state.getChildWithName ("Roll"), nullptr);      // so does the drawn roll
     auto xml = state.createXml();
     return xml != nullptr && xml->writeTo (sol::Library::presetFolder().getChildFile (clean + ".solpreset"));
 }

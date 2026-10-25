@@ -24,7 +24,7 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     setLookAndFeel (&look);
 
     for (auto* b : { &libraryButton, &rescanButton, &stopButton, &presetButton, &prevPreset, &nextPreset, &savePreset,
-                     &playTab, &mapTab, &fxTab, &newButton, &octDown, &octUp })
+                     &playTab, &mapTab, &fxTab, &rollTab, &newButton, &octDown, &octUp })
         addAndMakeVisible (b);
 
     libraryButton.setTooltip ("Choose the folder that holds your instrument folders");
@@ -55,6 +55,11 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     playTab.onClick = [this] { showView (0); };
     mapTab.onClick  = [this] { showView (1); };
     fxTab.onClick   = [this] { showView (2); };
+    rollTab.setClickingTogglesState (false);
+    rollTab.onClick = [this] { showView (3); };
+    rollTab.setTooltip ("Draw notes as lines and bend them - each note bends on its own (MPE). Plays along with Logic.");
+    rollPage = std::make_unique<sol::gui::RollPage> (proc);
+    addChildComponent (*rollPage);
     fxTab.setTooltip ("EQ, chorus, echo and space");
     mapTab.setTooltip ("Import recordings and set their root notes, key ranges, velocities and articulations");
     newButton.onClick = [this] { newInstrument(); };
@@ -143,6 +148,10 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     keyswitch.setTooltip ("Where the articulation keys start (violet on the keyboard). Only active when an instrument has more than one articulation.");
     keyswitchAtt = std::make_unique<AudioProcessorValueTreeState::ComboBoxAttachment> (proc.params, "keyswitch", keyswitch);
 
+    for (auto* k : knobs) rightPanel.push_back (k);
+    for (auto* c : std::initializer_list<Component*> { &letRing, &zoneLo, &zoneHi, &zoneL, &keyswitch, &keyswitchL })
+        rightPanel.push_back (c);
+
     refreshList();
     showView (0);
     setSize (1200, 790);
@@ -215,7 +224,6 @@ void SolIntentEditor::paint (Graphics& g)
         g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 10.0f, 1.0f);
     };
     panelBox (browserArea);
-    panelBox (knobArea);
 
     auto heading = [&g] (Rectangle<int> r, const String& t)
     {
@@ -226,6 +234,8 @@ void SolIntentEditor::paint (Graphics& g)
         g.drawHorizontalLine (r.getBottom() - 1, (float) r.getX() + 90.0f, (float) r.getRight());
     };
     heading (browserArea.reduced (14, 0).withHeight (30), "INSTRUMENTS");
+    if (view == 3) return;   // the ROLL page covers the right-hand side
+    panelBox (knobArea);
     heading (sectionEnv, "LAYER " + SolIntentProcessor::layerLetter (proc.activeLayer));
     heading (sectionMotion, "MOTION  (right-click a knob > Modulate with)");
     heading (sectionMacros, "MACROS");
@@ -343,7 +353,11 @@ void SolIntentEditor::resized()
     mapTab.setBounds (tabs.removeFromLeft (90));
     tabs.removeFromLeft (6);
     fxTab.setBounds (tabs.removeFromLeft (90));
+    tabs.removeFromLeft (6);
+    rollTab.setBounds (tabs.removeFromLeft (90));
     c.removeFromTop (8);
+    if (rollPage != nullptr)   // the roll gets the centre and the right-hand column
+        rollPage->setBounds (c.getX(), c.getY(), knobArea.getRight() - c.getX(), knobArea.getBottom() - c.getY());
     mapView.setBounds (c);
     fxView.setBounds (c);
 
@@ -379,12 +393,16 @@ void SolIntentEditor::showView (int v)
     const bool play = v == 0;
     mapView.setVisible (v == 1);
     fxView.setVisible (v == 2);
+    if (rollPage != nullptr) rollPage->setVisible (v == 3);
+    for (auto* c : rightPanel) c->setVisible (v != 3);
     for (auto* comp : std::initializer_list<Component*> { &resonance, &morph, &pads, &octDown, &octUp, &padRangeLabel })
         comp->setVisible (play);
     for (auto* b : artButtons) b->setVisible (play);
     playTab.setToggleState (v == 0, dontSendNotification);
     mapTab.setToggleState (v == 1, dontSendNotification);
     fxTab.setToggleState (v == 2, dontSendNotification);
+    rollTab.setToggleState (v == 3, dontSendNotification);
+    repaint();
     if (v == 1)
         mapView.setTarget (proc.getLayerInfo (proc.activeLayer), proc.getArticulation (proc.activeLayer));
 }

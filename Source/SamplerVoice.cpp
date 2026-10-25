@@ -26,7 +26,13 @@ void SamplerVoice::startNote (int note, float velocity, juce::SynthesiserSound*,
     pos = 0.0;
     noteOffset = (float) (note - zone->rootNote);
     gain = zone->gain * ((1.0f - settings.velSens) + settings.velSens * std::pow (velocity, 1.6f));
+    // notes on channel 1 come from a normal keyboard and use the Bend knob; notes on channels
+    // 2-16 are MPE (the ROLL page, or an MPE controller), bending +/-48 semitones on their own
+    mpe = ! isPlayingChannel (1);
+    bendRange = mpe ? 48.0f : settings.bendRange;
     bendTarget = bendNow = bendFromWheel (pitchWheel);
+    pressure = pressureNow = 0.0f;
+    slide = slideNow = 0.5f;
     released = false;
     level = 0.0f;
 
@@ -57,6 +63,16 @@ void SamplerVoice::stopNote (float, bool allowTailOff)
     env.noteOff();
 }
 
+void SamplerVoice::channelPressureChanged (int newValue)
+{
+    if (mpe) pressure = juce::jlimit (0.0f, 1.0f, (float) newValue / 127.0f);
+}
+
+void SamplerVoice::controllerMoved (int controller, int value)
+{
+    if (mpe && controller == 74) slide = juce::jlimit (0.0f, 1.0f, (float) value / 127.0f);
+}
+
 void SamplerVoice::pitchWheelMoved (int newValue)
 {
     bendTarget = bendFromWheel (newValue);
@@ -80,10 +96,12 @@ void SamplerVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, in
     const int len = zone->audio.getNumSamples();
     const double srRatio = zone->sampleRate / getSampleRate();
     const float bendSmooth = 1.0f - std::exp (-1.0f / (0.004f * (float) getSampleRate()));   // ~4 ms glide on bends
+    const float exprSmooth = 1.0f - std::exp (-1.0f / (0.01f * (float) getSampleRate()));    // ~10 ms on pressure / slide
+    if (! mpe) bendRange = settings.bendRange;   // follow the Bend knob live
 
     auto ratioFor = [&] (float bend)
     {
-        float semis = noteOffset + settings.tuneSemis + bend * settings.bendRange;
+        float semis = noteOffset + settings.tuneSemis + bend * bendRange;
         return (semis == 0.0f ? 1.0 : std::exp2 (semis / 12.0)) * srRatio;
     };
 
@@ -131,7 +149,16 @@ void SamplerVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, in
             r = herm (srcR[i0], srcR[idx], srcR[i2], srcR[i3]);
         }
 
-        const float g = gain * env.getNextSample();
+        float g = gain * env.getNextSample();
+        if (mpe)
+        {
+            pressureNow += (pressure - pressureNow) * exprSmooth;
+            slideNow += (slide - slideNow) * exprSmooth;
+            g *= 1.0f + pressureNow;                                   // pressure swells it, up to +6 dB
+            const float pan = (slideNow - 0.5f) * 2.0f;                // slide moves it left / right
+            l *= juce::jmin (1.0f, 1.0f - pan);
+            r *= juce::jmin (1.0f, 1.0f + pan);
+        }
         l *= g; r *= g;
         if (R != nullptr) { L[i] += l; R[i] += r; }
         else              { L[i] += 0.5f * (l + r); }

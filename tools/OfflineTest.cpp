@@ -2,6 +2,7 @@
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
 #include <iostream>
+#include <map>
 
 using namespace juce;
 
@@ -128,6 +129,29 @@ static int snapshot (const File& png)
         if (auto* b = dynamic_cast<TextButton*> (c); b != nullptr && b->getButtonText() == "FX") b->triggerClick();
     MessageManager::getInstance()->runDispatchLoopUntil (300);
     save (png.getSiblingFile ("ui_fx.png"));
+
+    // the ROLL page with an example: a chord that fans out, swells and drifts
+    {
+        sol::roll::Pattern pat;
+        pat.lengthBeats = 16.0;
+        const float notes[] = { 48, 55, 60, 64, 67, 72 };
+        const float targets[] = { 43, 53, 60, 65, 70, 79 };
+        for (int i = 0; i < 6; ++i)
+        {
+            sol::roll::Line l;
+            l.id = pat.nextId++;
+            l.velocity = 0.45f + 0.09f * (float) i;
+            l.nodes = { { 0.5 + i * 0.25, notes[i], 0.0f }, { 6.0, notes[i], 0.6f }, { 10.0, targets[i], -0.4f }, { 14.0, targets[i], 0.0f } };
+            if (i % 2 == 0) l.pressure = { { 0.5, 0.1f }, { 6.0, 0.8f }, { 10.0, 0.3f }, { 14.0, 0.9f } };
+            if (i % 3 == 1) l.slide = { { 0.5, 0.5f }, { 7.0, 0.85f }, { 12.0, 0.2f }, { 14.0, 0.5f } };
+            pat.lines.push_back (l);
+        }
+        p.roll.setPattern (pat);
+        for (auto* c : ed->getChildren())
+            if (auto* b = dynamic_cast<TextButton*> (c); b != nullptr && b->getButtonText() == "ROLL") b->triggerClick();
+        MessageManager::getInstance()->runDispatchLoopUntil (400);
+        save (png.getSiblingFile ("ui_roll.png"));
+    }
     return 0;
 }
 
@@ -667,6 +691,122 @@ int main (int argc, char** argv)
         for (auto id : { "delayMix", "tone", "bVol" }) p.clearModulations (id);
         m.addEvent (MidiMessage::controllerEvent (1, 1, 0), 0);
         p.stopAllSound(); render (p, out, m, 2, bs);
+    }
+
+    std::cout << "ROLL page: MPE lines that bend\n";
+    {
+        p.stopAllSound(); render (p, out, m, 2, bs);
+        writeTone (root.getChildFile ("Long Tone/C3.wav"), 261.63, 6.0);   // long enough to hear the whole bend
+        p.rescanLibrary();
+        p.loadNow (0, p.getInstrumentList()[(size_t) jmax (0, p.findInList (root.getChildFile ("Long Tone")))]);
+        for (auto id : { "bOn", "cOn", "dOn", "morphOn" }) p.params.getParameter (id)->setValueNotifyingHost (0.0f);
+        p.params.getParameter ("aOn")->setValueNotifyingHost (1.0f);
+        p.params.getParameter ("reverbMix")->setValueNotifyingHost (0.0f);
+        render (p, out, m, 2, bs);
+
+        // one line: starts on C3, bends up an octave over 2 beats, then holds (beats 0..6 at 120 bpm = 3 s)
+        sol::roll::Pattern pat;
+        sol::roll::Line line;
+        line.id = pat.nextId++;
+        line.nodes = { { 0.0, 60.0f, 0.0f }, { 2.0, 72.0f, 0.0f }, { 6.0, 72.0f, 0.0f } };
+        line.velocity = 0.9f;
+        pat.lines.push_back (line);
+        pat.lengthBeats = 8.0;
+        pat.loop = false;
+        p.roll.setPattern (pat);
+        p.roll.stop();
+        render (p, out, m, 1, bs);
+        p.roll.play();
+
+        // listen at about 1.5 s (3 beats): well after the bend has arrived
+        const int blocksPerSec = (int) (sr / bs);
+        render (p, out, m, blocksPerSec * 3 / 2, bs);
+        capture.clear();
+        render (p, out, m, 20, bs, &capture);
+        int zc = 0;
+        for (int i = 1000; i < bs * 20; ++i) if (capture.getSample (0, i - 1) < 0.0f && capture.getSample (0, i) >= 0.0f) ++zc;
+        double hz = zc / ((bs * 20 - 1000) / sr);
+        CHECK (std::abs (hz - 523.25) < 20.0, "a drawn line bending C3 up an octave plays C4 (" + String (hz, 0) + " Hz)");
+        p.roll.stop(); render (p, out, m, 2, bs);
+        p.stopAllSound(); render (p, out, m, 2, bs);
+
+        // two lines at once: each gets its own MIDI channel and only the bent one gets pitch bend
+        sol::roll::Pattern two;
+        sol::roll::Line flat, bent;
+        flat.id = two.nextId++; flat.nodes = { { 0.0, 60.0f, 0.0f }, { 4.0, 60.0f, 0.0f } };
+        bent.id = two.nextId++; bent.nodes = { { 0.0, 64.0f, 0.0f }, { 2.0, 67.0f, 0.0f }, { 4.0, 67.0f, 0.0f } };
+        two.lines = { flat, bent }; two.lengthBeats = 8.0; two.loop = false;
+        sol::roll::RollEngine eng;
+        eng.prepare (sr);
+        eng.setPattern (two);
+        eng.play();
+        std::map<int, int> notesOn, bendsAfterStart;
+        std::map<int, bool> started;
+        for (int b = 0; b < blocksPerSec * 2; ++b)
+        {
+            MidiBuffer mb;
+            eng.process (mb, bs, nullptr, 12);
+            for (const auto meta : mb)
+            {
+                auto msg = meta.getMessage();
+                if (msg.isNoteOn()) { notesOn[msg.getChannel()] = msg.getNoteNumber(); started[msg.getChannel()] = true; }
+                else if (msg.isPitchWheel() && started[msg.getChannel()]) ++bendsAfterStart[msg.getChannel()];
+            }
+        }
+        int flatCh = -1, bentCh = -1;
+        for (auto& [ch, note] : notesOn) { if (note == 60) flatCh = ch; if (note == 64) bentCh = ch; }
+        CHECK (flatCh > 1 && bentCh > 1 && flatCh != bentCh, "each drawn note gets its own MIDI channel (MPE)");
+        CHECK (bendsAfterStart[bentCh] > 10 && bendsAfterStart[flatCh] == 0, "only the bent note receives pitch bend ("
+               + String (bendsAfterStart[bentCh]) + " vs " + String (bendsAfterStart[flatCh]) + ")");
+
+        // pressure swells a note
+        auto levelWith = [&] (float pressureValue)
+        {
+            sol::roll::Pattern pp;
+            sol::roll::Line pl;
+            pl.id = pp.nextId++;
+            pl.nodes = { { 0.0, 60.0f, 0.0f }, { 4.0, 60.0f, 0.0f } };
+            pl.pressure = { { 0.0, pressureValue }, { 4.0, pressureValue } };
+            pp.lines.push_back (pl); pp.lengthBeats = 8.0; pp.loop = false;
+            p.roll.setPattern (pp);
+            p.roll.stop(); render (p, out, m, 1, bs);
+            p.stopAllSound(); render (p, out, m, 1, bs);
+            p.roll.play();
+            render (p, out, m, 20, bs);
+            float rms = 0;
+            for (int b = 0; b < 10; ++b) { p.processBlock (out, m); m.clear(); rms += out.getRMSLevel (0, 0, bs); }
+            p.roll.stop(); render (p, out, m, 2, bs);
+            return rms;
+        };
+        const float soft = levelWith (0.0f), pressed = levelWith (1.0f);
+        CHECK (pressed > soft * 1.6f, "pressure swells the note (" + String (soft, 3) + " -> " + String (pressed, 3) + ")");
+
+        // a normal keyboard still uses the Bend knob, not the MPE range
+        p.stopAllSound(); render (p, out, m, 2, bs);
+        p.params.getParameter ("bendRange")->setValueNotifyingHost (p.params.getParameterRange ("bendRange").convertTo0to1 (2.0f));
+        m.addEvent (MidiMessage::pitchWheel (1, 16383), 0);
+        m.addEvent (MidiMessage::noteOn (1, 60, (uint8) 100), 0);
+        render (p, out, m, 10, bs);
+        capture.clear();
+        render (p, out, m, 20, bs, &capture);
+        zc = 0;
+        for (int i = 1000; i < bs * 20; ++i) if (capture.getSample (0, i - 1) < 0.0f && capture.getSample (0, i) >= 0.0f) ++zc;
+        hz = zc / ((bs * 20 - 1000) / sr);
+        CHECK (std::abs (hz - 293.7) < 12.0, "keyboard pitch bend still follows the Bend knob (+2 st: " + String (hz, 0) + " Hz)");
+        m.addEvent (MidiMessage::pitchWheel (1, 8192), 0);
+        p.params.getParameter ("bendRange")->setValueNotifyingHost (p.params.getParameterRange ("bendRange").convertTo0to1 (12.0f));
+        p.stopAllSound(); render (p, out, m, 2, bs);
+
+        // the roll saves with the project, but not in presets
+        p.roll.setPattern (two);
+        MemoryBlock st; p.getStateInformation (st);
+        SolIntentProcessor q; q.setStateInformation (st.getData(), (int) st.getSize());
+        CHECK (q.roll.getPattern()->lines.size() == 2 && q.roll.getPattern()->lines[1].nodes.size() == 3, "the drawn roll reopens with the project");
+        p.savePreset ("Roll Check");
+        auto pf = sol::Library::presetFolder().getChildFile ("Roll Check.solpreset");
+        CHECK (! pf.loadFileAsString().contains ("<Roll"), "presets don't carry the roll");
+        pf.deleteFile();
+        p.roll.setPattern (sol::roll::Pattern());
     }
 
     std::cout << (failures == 0 ? "\nALL PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");

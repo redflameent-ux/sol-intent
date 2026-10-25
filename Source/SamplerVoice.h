@@ -36,7 +36,8 @@ public:
     void startNote (int note, float velocity, juce::SynthesiserSound*, int pitchWheel) override;
     void stopNote (float velocity, bool allowTailOff) override;
     void pitchWheelMoved (int newValue) override;
-    void controllerMoved (int, int) override {}
+    void controllerMoved (int controller, int value) override;
+    void channelPressureChanged (int newValue) override;
     void renderNextBlock (juce::AudioBuffer<float>&, int startSample, int numSamples) override;
     using juce::SynthesiserVoice::renderNextBlock;
 
@@ -51,6 +52,10 @@ private:
     float noteOffset = 0.0f;       // key - root, in semitones
     float gain = 1.0f;
     float bendTarget = 0.0f, bendNow = 0.0f;
+    float bendRange = 12.0f;      // the Bend knob for a normal keyboard; 48 for MPE notes (channels 2-16)
+    bool  mpe = false;
+    float pressure = 0.0f, pressureNow = 0.0f;   // MPE pressure swells the note (up to +6 dB)
+    float slide = 0.5f, slideNow = 0.5f;         // MPE slide pans the note
     bool  released = false;        // key let go while "let ring" was on
     juce::ADSR env;
     float level = 0.0f;            // for the display

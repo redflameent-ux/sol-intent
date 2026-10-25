@@ -5,6 +5,7 @@
 #include "SamplerVoice.h"
 #include "Tone.h"
 #include "Effects.h"
+#include "roll/RollEngine.h"
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -105,6 +106,9 @@ public:
     void forgetLearning (const juce::String& paramID);
     int  getLearnedCC (const juce::String& paramID) const;
     juce::String getLearningParam() const;
+
+    // ---- the ROLL page: notes drawn as bendable lines, played as MPE (each note on its own channel)
+    sol::roll::RollEngine roll;
 
     // ---- for the screen
     juce::AudioProcessorValueTreeState params;

@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "PluginProcessor.h"
+#include "gui/RollPage.h"
 
 namespace ui
 {
@@ -289,7 +290,7 @@ private:
 
     juce::TextButton libraryButton { "Library..." }, rescanButton { "Rescan" }, stopButton { "Stop all" },
                      presetButton, prevPreset { "<" }, nextPreset { ">" }, savePreset { "Save" },
-                     playTab { "PLAY" }, mapTab { "MAP" }, fxTab { "FX" }, newButton { "+ New instrument" },
+                     playTab { "PLAY" }, mapTab { "MAP" }, fxTab { "FX" }, rollTab { "ROLL" }, newButton { "+ New instrument" },
                      octDown { "-" }, octUp { "+" };
     juce::ListBox browser { "Instruments", this };
     std::array<std::unique_ptr<LayerCard>, SolIntentProcessor::numLayers> cards;
@@ -297,6 +298,8 @@ private:
     PadGrid pads { proc };
     MapView mapView { proc };
     FxView fxView { proc };
+    std::unique_ptr<sol::gui::RollPage> rollPage;
+    std::vector<juce::Component*> rightPanel;   // hidden while the ROLL page takes the full width
     MorphPad morph { proc };
     TintedKeyboard keyboard { proc.keyboardState };
     juce::Label statusLabel, padRangeLabel;
@@ -317,7 +320,7 @@ private:
     int shownArt = -1, shownLayer = -1, shownKs = -2;
     juce::String shownPreset;
     bool mapMode = false, dragging = false;
-    int view = 0;   // 0 play, 1 map, 2 fx
+    int view = 0;   // 0 play, 1 map, 2 fx, 3 roll
     void showView (int);
     std::unique_ptr<juce::FileChooser> chooser;
     juce::Rectangle<int> knobArea, leftArea, centreArea, browserArea;

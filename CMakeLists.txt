@@ -26,7 +26,9 @@ set(SOL_SOURCES
     Source/PluginEditor.cpp
     Source/MapView.cpp
     Source/EditorMain.cpp
-    Source/Panels.cpp)
+    Source/Panels.cpp
+    Source/roll/RollEngine.cpp
+    Source/gui/RollPage.cpp)
 
 set(SOL_DEFS
     JUCE_WEB_BROWSER=0
