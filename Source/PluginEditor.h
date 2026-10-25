@@ -87,7 +87,6 @@ private:
     std::vector<Speck> specks;
     std::vector<Exhale> exhales;
     float breathIn = 0.0f;               // how much light is gathered in the centre (0..1)
-    float idle = 1.0f, quietFor = 10.0f; // the logo fades into the ring when nothing has sounded for a moment
     juce::Colour breathCol { 0xff4fe08a };
     double lastTick = 0.0;
     juce::Random rng;
