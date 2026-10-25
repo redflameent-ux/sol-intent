@@ -402,7 +402,7 @@ static bool readFile (const juce::File& f, juce::AudioFormatManager& fm, Zone& z
     if (r == nullptr || r->lengthInSamples <= 0)
         return false;
 
-    auto len = (int) juce::jmin<juce::int64> (r->lengthInSamples, (juce::int64) r->sampleRate * 120);   // 2 min cap
+    auto len = (int) juce::jmin<juce::int64> (r->lengthInSamples, (juce::int64) r->sampleRate * 600);   // up to 10 minutes per recording
     z.audio.setSize (2, len);
     z.audio.clear();
     r->read (&z.audio, 0, len, 0, true, r->numChannels > 1);
@@ -464,14 +464,15 @@ InstrumentPtr Library::makeDemoBowl()
     inst->name = "Demo Bowl (built-in)";
     inst->category = "Built-in";
 
-    const double sr = 44100.0;
-    const int len = (int) (sr * 9.0);
+    // rings for ~22 s and fades out naturally (32 kHz keeps the memory down - it's only a demo)
+    const double sr = 32000.0;
+    const int len = (int) (sr * 22.0);
     juce::Random rng (1234);
     ArticulationSpec layout { "Strike", {} };
     Articulation art;
     art.name = "Strike";
 
-    for (int root = 48; root <= 84; root += 4)
+    for (int root = 48; root <= 84; root += 6)
     {
         Zone z;
         z.fileName = "demo " + noteName (root);
@@ -482,7 +483,7 @@ InstrumentPtr Library::makeDemoBowl()
 
         const double f0 = 440.0 * std::pow (2.0, (root - 69) / 12.0);
         // bowl-like (inharmonic) partials: ratio, level, decay seconds, beat Hz
-        const double partials[][4] = { { 1.0, 1.0, 7.0, 0.7 }, { 2.71, 0.5, 4.5, 1.3 }, { 5.15, 0.22, 2.4, 2.1 },
+        const double partials[][4] = { { 1.0, 1.0, 9.0, 0.7 }, { 2.71, 0.5, 6.0, 1.3 }, { 5.15, 0.22, 3.2, 2.1 },
                                        { 8.32, 0.1, 1.3, 3.0 }, { 12.1, 0.05, 0.7, 0.0 } };
         auto* L = z.audio.getWritePointer (0);
         auto* R = z.audio.getWritePointer (1);
@@ -507,6 +508,13 @@ InstrumentPtr Library::makeDemoBowl()
         {
             float n = (rng.nextFloat() * 2.0f - 1.0f) * 0.15f * std::exp (-(float) i / 80.0f);
             L[i] += n; R[i] += n;
+        }
+        // gentle fade over the last 4 seconds so it never stops abruptly
+        const int fadeLen = (int) (sr * 4.0);
+        for (int i = len - fadeLen; i < len; ++i)
+        {
+            const float f = (float) (len - i) / (float) fadeLen;
+            L[i] *= f * f; R[i] *= f * f;
         }
         z.audio.applyGain (0.25f);
         layout.zones.push_back ({ {}, root });

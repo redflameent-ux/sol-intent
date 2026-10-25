@@ -150,6 +150,8 @@ void SamplerVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, in
         }
 
         float g = gain * env.getNextSample();
+        if (pos > (double) (len - 257))   // a tiny fade over the last few ms so a recording never ends with a click
+            g *= juce::jmax (0.0f, (float) ((double) (len - 1) - pos) / 256.0f);
         if (mpe)
         {
             pressureNow += (pressure - pressureNow) * exprSmooth;

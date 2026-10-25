@@ -977,6 +977,52 @@ int main (int argc, char** argv)
         mf.deleteFile();
     }
 
+    std::cout << "Longer rings and wider limits\n";
+    {
+        auto demo = sol::Library::makeDemoBowl();
+        auto* z = demo->get (0)->findZone (60, 100, 0);
+        const double secs = z != nullptr ? z->audio.getNumSamples() / z->sampleRate : 0.0;
+        CHECK (secs > 20.0, "the demo bowl rings for over 20 seconds (" + String (secs, 1) + " s)");
+        if (z != nullptr)
+        {
+            const int n = z->audio.getNumSamples();
+            const float midLevel = z->audio.getMagnitude (0, (int) (z->sampleRate * 8.0), (int) z->sampleRate);
+            const float endLevel = z->audio.getMagnitude (0, n - 200, 200);
+            CHECK (midLevel > 0.005f, "it's still clearly ringing at 8-9 seconds (" + String (midLevel, 4) + ")");
+            CHECK (endLevel < midLevel * 0.02f, "and fades out to nothing instead of stopping (" + String (endLevel, 6) + ")");
+        }
+        auto maxOf = [&p] (const char* id) { return p.params.getParameterRange (id).end; };
+        CHECK (maxOf ("aAtk") >= 20000.0f && maxOf ("aDec") >= 60000.0f && maxOf ("aRel") >= 60.0f,
+               "Attack reaches 20 s, Decay 60 s, Release 60 s");
+
+        // a long one-shot plays all the way through (let ring), with no click at the very end
+        {   // a steady 30-second tone (no fade), so anything cutting it short would show
+            auto f = root.getChildFile ("Long Gong/C3.wav");
+            f.getParentDirectory().createDirectory(); f.deleteFile();
+            WavAudioFormat wav;
+            std::unique_ptr<OutputStream> os (f.createOutputStream());
+            std::unique_ptr<AudioFormatWriter> w (wav.createWriterFor (os.get(), 48000.0, 1, 24, {}, 0));
+            os.release();
+            AudioBuffer<float> tone (1, 48000 * 30);
+            for (int i = 0; i < tone.getNumSamples(); ++i) tone.setSample (0, i, 0.3f * (float) std::sin (MathConstants<double>::twoPi * 110.0 * i / 48000.0));
+            w->writeFromAudioSampleBuffer (tone, 0, tone.getNumSamples());
+        }
+        p.rescanLibrary();
+        p.loadNow (0, p.getInstrumentList()[(size_t) jmax (0, p.findInList (root.getChildFile ("Long Gong")))]);
+        p.params.getParameter ("aRing")->setValueNotifyingHost (1.0f);
+        p.params.getParameter ("reverbMix")->setValueNotifyingHost (0.0f);
+        p.stopAllSound(); render (p, out, m, 2, bs);
+        m.addEvent (MidiMessage::noteOn (1, 60, (uint8) 110), 0);
+        render (p, out, m, 2, bs);
+        m.addEvent (MidiMessage::noteOff (1, 60), 0);
+        const int blocks25s = (int) (sr * 25.0 / bs);
+        render (p, out, m, blocks25s, bs);
+        bool stillThere = false;
+        for (int i = 0; i < bs; ++i) if (std::abs (out.getSample (0, i)) > 1.0e-6f) stillThere = true;
+        CHECK (stillThere, "a 30-second recording is still playing 25 seconds after the key was let go");
+        p.stopAllSound(); render (p, out, m, 2, bs);
+    }
+
     std::cout << (failures == 0 ? "\nALL PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");
     return failures == 0 ? 0 : 1;
 }

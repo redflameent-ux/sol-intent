@@ -133,10 +133,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout SolIntentProcessor::createLa
         add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Vol"), 1 }, L + " Level", NormalisableRange<float> (-36.0f, 6.0f, 0.1f), 0.0f, db));
         add (std::make_unique<AudioParameterInt>   (ParameterID { layerParam (i, "Tune"), 1 }, L + " Tune", -24, 24, 0, st));
         add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Pan"), 1 }, L + " Pan", NormalisableRange<float> (-1.0f, 1.0f), 0.0f, panTxt));
-        add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Atk"), 1 }, L + " Attack", NormalisableRange<float> (0.0f, 4000.0f, 1.0f, 0.35f), 0.0f, ms));
-        add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Dec"), 1 }, L + " Decay", NormalisableRange<float> (0.0f, 10000.0f, 1.0f, 0.35f), 500.0f, ms));
+        add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Atk"), 1 }, L + " Attack", NormalisableRange<float> (0.0f, 20000.0f, 1.0f, 0.3f), 0.0f, ms));     // up to 20 s swell
+        add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Dec"), 1 }, L + " Decay", NormalisableRange<float> (0.0f, 60000.0f, 1.0f, 0.3f), 500.0f, ms));   // up to 60 s
         add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Sus"), 1 }, L + " Sustain", NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
-        add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Rel"), 1 }, L + " Release", NormalisableRange<float> (0.02f, 20.0f, 0.01f, 0.4f), 3.0f, sec));
+        add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Rel"), 1 }, L + " Release", NormalisableRange<float> (0.02f, 60.0f, 0.01f, 0.3f), 3.0f, sec));     // up to 60 s
         add (std::make_unique<AudioParameterBool>  (ParameterID { layerParam (i, "Ring"), 1 }, L + " Let Ring", true));
         add (std::make_unique<AudioParameterInt>   (ParameterID { layerParam (i, "KeyLo"), 1 }, L + " Lowest Key", 0, 127, 0, note));
         add (std::make_unique<AudioParameterInt>   (ParameterID { layerParam (i, "KeyHi"), 1 }, L + " Highest Key", 0, 127, 127, note));
