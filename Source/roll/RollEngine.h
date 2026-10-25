@@ -43,6 +43,9 @@ public:
     // Adds the pattern's notes to `midi`. masterBendRange = the Bend knob (for recording channel 1).
     void process (juce::MidiBuffer& midi, int numSamples, juce::AudioPlayHead* playHead, int masterBendRange);
 
+    // the Pitch Mod wobble, in semitones (shared by playback and MIDI export so they match)
+    static float wobble (const Pattern& p, const Line& l, double pos);
+
     // for the screen
     std::atomic<double> playheadBeat { -1.0 };
     std::atomic<bool> transportRunning { false };
@@ -52,7 +55,6 @@ private:
     struct Active { int lineId = -1, channel = 0, note = 0; float bend = 0, pressure = -1, slide = -1; };
 
     void allNotesOff (juce::MidiBuffer& out, int sample);
-    float wobble (const Pattern& p, const Line& l, double pos) const;
     static int bendValue (float semis, float range)
     {
         return juce::jlimit (0, 16383, juce::roundToInt (8192.0f + semis / range * 8191.0f));

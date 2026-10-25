@@ -842,6 +842,8 @@ RollPage::RollPage (SolIntentProcessor& p) : engine (p.roll), proc (p)
     setWantsKeyboardFocus (true);
     model = *engine.getPattern();
     addAndMakeVisible (canvas);
+    addAndMakeVisible (dragMidi);
+    dragMidi.setTooltip ("Drag this onto a track in Logic to drop the pattern in as MPE MIDI - every bend, pressure and slide kept");
 
     for (auto* b : { &drawBtn, &selectBtn, &cutBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &openBtn, &saveBtn, &loopBtn,
                      &quantBtn, &exportBtn, &clearBtn, &playBtn, &stopBtn, &recBtn, &keysBtn, &polarityBtn, &snapBtn })
@@ -986,6 +988,8 @@ void RollPage::resized()
     row2.removeFromRight (4);
     exportBtn.setBounds (row2.removeFromRight (94));
     row2.removeFromRight (4);
+    dragMidi.setBounds (row2.removeFromRight (104));
+    row2.removeFromRight (8);
     saveBtn.setBounds (row2.removeFromRight (52));
     row2.removeFromRight (4);
     openBtn.setBounds (row2.removeFromRight (52));
@@ -1194,7 +1198,7 @@ static File rollFolder()
 
 void RollPage::savePattern()
 {
-    chooser = std::make_unique<FileChooser> ("Save pattern", rollFolder().getChildFile ("My pattern.ozroll"), "*.ozroll");
+    chooser = std::make_unique<FileChooser> ("Save pattern", rollFolder().getChildFile ("My pattern.solroll"), "*.solroll");
     chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
         [this] (const FileChooser& fc)
         {
@@ -1208,7 +1212,7 @@ void RollPage::savePattern()
 
 void RollPage::openPattern()
 {
-    chooser = std::make_unique<FileChooser> ("Open pattern", rollFolder(), "*.ozroll");
+    chooser = std::make_unique<FileChooser> ("Open pattern", rollFolder(), "*.solroll;*.ozroll");
     chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles, [this] (const FileChooser& fc)
     {
         auto f = fc.getResult();
@@ -1226,72 +1230,123 @@ void RollPage::openPattern()
     });
 }
 
-void RollPage::exportMidi()
+// The pattern as an MPE MIDI file, exactly as the plugin plays it:
+//  - an MPE Configuration Message (lower zone, master channel 1, members 2-15)
+//  - +/-48 semitone pitch-bend range on every member channel
+//  - each note on its own channel, with its bend, pressure and slide (CC74) reset as it starts,
+//    so no note ever inherits another note's bend, pressure or slide
+//  - the Pitch Mod wobble baked into the bends
+juce::MidiMessageSequence RollPage::buildMidi (const roll::Pattern& model, double bpm, int* droppedNotes)
 {
-    // MPE MIDI file: channel 1 is the master, each note gets its own channel (2-15) with
-    // +/-48 semitone bends, pressure and CC74 slide, so other DAWs keep every bend.
     MidiMessageSequence seq;
     const int tpq = 960;
-    seq.addEvent (MidiMessage::tempoMetaEvent (juce::roundToInt (60000000.0 / juce::jmax (20.0, engine.currentBpm.load()))), 0);
+    seq.addEvent (MidiMessage::tempoMetaEvent (juce::roundToInt (60000000.0 / juce::jmax (20.0, bpm))), 0);
     for (const auto meta : MidiRPNGenerator::generate (1, 6, 14, false, false)) seq.addEvent (meta.getMessage(), 0);   // MPE lower zone, 14 member channels
     for (int ch = 2; ch <= 15; ++ch)
         for (const auto meta : MidiRPNGenerator::generate (ch, 0, 48, false, false)) seq.addEvent (meta.getMessage(), 0);   // 48 st per-note bend
 
     auto sorted = model.lines;
-    std::sort (sorted.begin(), sorted.end(), [] (auto& a, auto& b) { return a.start() < b.start(); });
+    std::sort (sorted.begin(), sorted.end(), [] (auto& x, auto& y) { return x.start() < y.start(); });
     std::array<double, 16> busyUntil {};
-    int nextCh = 2;
+    int nextCh = 2, dropped = 0;
     for (auto& l : sorted)
     {
+        if (l.nodes.size() < 2) continue;
         int ch = -1;
         for (int t = 0; t < 14 && ch < 0; ++t)
         {
             const int c = nextCh;
             nextCh = nextCh >= 15 ? 2 : nextCh + 1;
-            if (busyUntil[(size_t) c] <= l.start()) ch = c;
+            if (busyUntil[(size_t) c] <= l.start() + 1.0e-9) ch = c;
         }
-        if (ch < 0) continue;
+        if (ch < 0) { ++dropped; continue; }   // more than 14 notes at once
         busyUntil[(size_t) ch] = l.end();
         const int note = juce::jlimit (0, 127, juce::roundToInt (l.startPitch()));
         auto ticks = [tpq] (double beat) { return beat * tpq; };
+        auto pitchAt = [&model, &l] (double beat) { return l.pitchAt (beat) + roll::RollEngine::wobble (model, l, beat); };
         auto bend = [note] (float p) { return juce::jlimit (0, 16383, juce::roundToInt (8192.0f + (p - (float) note) / 48.0f * 8191.0f)); };
-        seq.addEvent (MidiMessage::pitchWheel (ch, bend (l.pitchAt (l.start()))), ticks (l.start()));
-        seq.addEvent (MidiMessage::noteOn (ch, note, juce::jlimit (0.01f, 1.0f, l.velocity)), ticks (l.start()));
-        int lastBend = -1, lastPress = -1, lastSlide = -1;
-        for (double b = l.start(); b < l.end(); b += 1.0 / 48.0)
+        const int startPress = juce::jlimit (0, 127, juce::roundToInt (l.pressureAt (l.start()) * 127.0f));
+        const int startSlide = juce::jlimit (0, 127, juce::roundToInt (l.slideAt (l.start()) * 127.0f));
+        const double t0 = ticks (l.start());
+
+        // reset this channel's state before the note (what MPE instruments expect)...
+        seq.addEvent (MidiMessage::pitchWheel (ch, bend (pitchAt (l.start()))), t0);
+        seq.addEvent (MidiMessage::channelPressureChange (ch, startPress), t0);
+        seq.addEvent (MidiMessage::controllerEvent (ch, 74, startSlide), t0);
+        seq.addEvent (MidiMessage::noteOn (ch, note, juce::jlimit (0.01f, 1.0f, l.velocity)), t0);
+        // ...and once more right after it, for instruments that only listen once a note has started
+        seq.addEvent (MidiMessage::channelPressureChange (ch, startPress), t0);
+        seq.addEvent (MidiMessage::controllerEvent (ch, 74, startSlide), t0);
+
+        int lastBend = bend (pitchAt (l.start())), lastPress = startPress, lastSlide = startSlide;
+        for (double b = l.start() + 1.0 / 192.0; b < l.end(); b += 1.0 / 192.0)   // ~2.6 ms steps at 120 bpm
         {
-            const int bv = bend (l.pitchAt (b));
+            const int bv = bend (pitchAt (b));
             if (bv != lastBend) { seq.addEvent (MidiMessage::pitchWheel (ch, bv), ticks (b)); lastBend = bv; }
-            if (! l.pressure.empty())
-            {
-                const int pv = juce::roundToInt (l.pressureAt (b) * 127.0f);
-                if (pv != lastPress) { seq.addEvent (MidiMessage::channelPressureChange (ch, pv), ticks (b)); lastPress = pv; }
-            }
-            if (! l.slide.empty())
-            {
-                const int sv = juce::roundToInt (l.slideAt (b) * 127.0f);
-                if (sv != lastSlide) { seq.addEvent (MidiMessage::controllerEvent (ch, 74, sv), ticks (b)); lastSlide = sv; }
-            }
+            const int pv = juce::jlimit (0, 127, juce::roundToInt (l.pressureAt (b) * 127.0f));
+            if (pv != lastPress) { seq.addEvent (MidiMessage::channelPressureChange (ch, pv), ticks (b)); lastPress = pv; }
+            const int sv = juce::jlimit (0, 127, juce::roundToInt (l.slideAt (b) * 127.0f));
+            if (sv != lastSlide) { seq.addEvent (MidiMessage::controllerEvent (ch, 74, sv), ticks (b)); lastSlide = sv; }
         }
         seq.addEvent (MidiMessage::noteOff (ch, note), ticks (l.end()));
     }
     seq.updateMatchedPairs();
     seq.sort();
+    if (droppedNotes != nullptr) *droppedNotes = dropped;
+    return seq;
+}
 
+juce::File RollPage::writeMidiFile (const juce::File& f, int* droppedNotes) const
+{
+    MidiFile mf;
+    mf.setTicksPerQuarterNote (960);
+    mf.addTrack (buildMidi (model, engine.currentBpm.load(), droppedNotes));
+    f.getParentDirectory().createDirectory();
+    f.deleteFile();
+    if (auto os = f.createOutputStream()) mf.writeTo (*os);
+    return f;
+}
+
+void RollPage::exportMidi()
+{
     chooser = std::make_unique<FileChooser> ("Export MPE MIDI", rollFolder().getChildFile ("Sol Intent pattern.mid"), "*.mid");
     chooser->launchAsync (FileBrowserComponent::saveMode | FileBrowserComponent::canSelectFiles | FileBrowserComponent::warnAboutOverwriting,
-        [this, seq, tpq] (const FileChooser& fc)
+        [this] (const FileChooser& fc)
         {
             auto f = fc.getResult();
             if (f == File()) return;
             if (! f.hasFileExtension ("mid")) f = f.withFileExtension ("mid");
-            MidiFile mf;
-            mf.setTicksPerQuarterNote (tpq);
-            mf.addTrack (seq);
-            f.deleteFile();
-            if (auto os = f.createOutputStream()) { mf.writeTo (*os); setHint ("Exported " + f.getFileName() + " (MPE)"); }
+            int dropped = 0;
+            writeMidiFile (f, &dropped);
+            setHint ("Exported " + f.getFileName() + " (MPE)" + (dropped > 0 ? " - " + String (dropped) + " notes skipped (more than 14 at once)" : String()));
         });
 }
+
+// Drag this onto a track in Logic (or any DAW) to drop the pattern in as MPE MIDI.
+void RollPage::DragMidi::paint (Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (isMouseOver() ? col::panelHi.brighter (0.1f) : col::panelHi);
+    g.fillRoundedRectangle (r, 6.0f);
+    g.setColour (col::wavetable.withAlpha (isMouseOver() ? 1.0f : 0.7f));
+    g.drawRoundedRectangle (r, 6.0f, 1.2f);
+    g.setColour (col::text);
+    g.setFont (font (12.5f));
+    g.drawText ("Drag to Logic", r, Justification::centred);
+}
+
+void RollPage::DragMidi::mouseDrag (const MouseEvent& e)
+{
+    if (dragging || e.getDistanceFromDragStart() < 4) return;
+    dragging = true;
+    auto f = rollFolder().getChildFile ("Drag").getChildFile ("Sol Intent " + Time::getCurrentTime().formatted ("%H%M%S") + ".mid");
+    int dropped = 0;
+    owner.writeMidiFile (f, &dropped);
+    if (dropped > 0) owner.setHint (String (dropped) + " notes skipped - MPE allows 14 notes at once.");
+    DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this, [this] { dragging = false; });
+}
+
+void RollPage::DragMidi::mouseUp (const MouseEvent&) { dragging = false; }
 
 // ---------------------------------------------------------------------------- recording
 void RollPage::drainRecording()

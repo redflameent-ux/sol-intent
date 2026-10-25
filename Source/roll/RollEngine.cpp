@@ -70,7 +70,7 @@ void RollEngine::allNotesOff (juce::MidiBuffer& out, int sample)
     }
 }
 
-float RollEngine::wobble (const Pattern& p, const Line& l, double pos) const
+float RollEngine::wobble (const Pattern& p, const Line& l, double pos)
 {
     if (p.modShape <= 0 || p.modAmount <= 0.0f) return 0.0f;
     const double cycles = (pos - l.start()) / juce::jmax (1.0e-3, p.modRateBeats);

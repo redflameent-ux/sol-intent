@@ -814,6 +814,146 @@ int main (int argc, char** argv)
         p.roll.setPattern (sol::roll::Pattern());
     }
 
+    std::cout << "MPE MIDI export (what Logic receives)\n";
+    {
+        // a pattern with bends, a Pitch Mod wobble, pressure and slide - and more notes than channels,
+        // so channels get reused and must be reset each time
+        sol::roll::Pattern pat;
+        pat.lengthBeats = 32.0; pat.loop = false;
+        pat.modShape = 1; pat.modAmount = 40.0f; pat.modRateBeats = 0.5; pat.modFade = 0.25f;
+        for (int i = 0; i < 18; ++i)
+        {
+            sol::roll::Line l;
+            l.id = pat.nextId++;
+            l.velocity = 0.3f + 0.03f * (float) i;
+            const double st = i * 1.5;
+            l.nodes = { { st, 50.0f + (float) i, 0.0f }, { st + 1.0, 50.0f + (float) i + (i % 2 ? 7.0f : -5.0f), 0.5f }, { st + 2.0, 50.0f + (float) i, 0.0f } };
+            if (i % 3 == 0) l.pressure = { { st, 1.0f }, { st + 2.0, 0.6f } };   // others: none, so they must start at 0
+            if (i % 4 == 0) l.slide = { { st, 0.9f }, { st + 2.0, 0.1f } };      // others: centre
+            pat.lines.push_back (l);
+        }
+        auto seq = sol::gui::RollPage::buildMidi (pat, 120.0);
+
+        // round trip through a real .mid file
+        auto mf = File::getSpecialLocation (File::tempDirectory).getChildFile ("sol_mpe_test.mid");
+        {
+            MidiFile out2; out2.setTicksPerQuarterNote (960); out2.addTrack (seq);
+            mf.deleteFile();
+            FileOutputStream os (mf); out2.writeTo (os);
+        }
+        MidiFile in2;
+        { FileInputStream is (mf); in2.readFrom (is); }
+        const auto* track = in2.getTrack (0);
+        auto musical = [] (const MidiMessageSequence& sq) { int n = 0; for (int i = 0; i < sq.getNumEvents(); ++i) if (! sq.getEventPointer (i)->message.isMetaEvent()) ++n; return n; };
+        CHECK (track != nullptr && musical (*track) == musical (seq), "the .mid file reads back with every note, bend, pressure and slide event ("
+               + String (musical (seq)) + ")");
+
+        // MPE setup at the start: lower zone with 14 member channels, +/-48 st bend on each
+        bool mcm = false; int bendRanges = 0;
+        {
+            MidiRPNDetector det;
+            for (int i = 0; i < track->getNumEvents(); ++i)
+            {
+                auto msg = track->getEventPointer (i)->message;
+                if (! msg.isController() || msg.getTimeStamp() > 0) continue;
+                if (auto rpn = det.tryParse (msg.getChannel(), msg.getControllerNumber(), msg.getControllerValue()))
+                {
+                    if (rpn->parameterNumber == 6 && rpn->channel == 1 && rpn->value == 14) mcm = true;
+                    if (rpn->parameterNumber == 0 && rpn->channel >= 2 && rpn->value == 48) ++bendRanges;
+                }
+            }
+        }
+        CHECK (mcm, "starts with the MPE Configuration Message (master channel 1, 14 member channels)");
+        CHECK (bendRanges == 14, "sets +/-48 semitone bend on all 14 member channels (" + String (bendRanges) + ")");
+
+        // replay the file the way an MPE instrument would, and compare with the drawn lines
+        struct ChanState { int note = -1; float bend = 0, press = 0, slide = 0.5f; int lineIdx = -1; };
+        std::array<ChanState, 17> chs {};
+        std::vector<std::pair<double, int>> starts;   // beat, line index (by order of start)
+        std::vector<int> order (pat.lines.size());
+        for (size_t i = 0; i < order.size(); ++i) order[i] = (int) i;
+        std::sort (order.begin(), order.end(), [&] (int a2, int b2) { return pat.lines[(size_t) a2].start() < pat.lines[(size_t) b2].start(); });
+        int nextLine = 0, notesSeen = 0, resetsOk = 0, chanReuse = 0;
+        float worstPitch = 0, worstPress = 0, worstSlide = 0;
+        std::array<int, 17> usedCount {};
+        for (int i = 0; i < track->getNumEvents(); ++i)
+        {
+            auto msg = track->getEventPointer (i)->message;
+            const double beat = msg.getTimeStamp() / 960.0;
+            const int ch = msg.getChannel();
+            if (ch < 1 || ch > 16) continue;
+            auto& c = chs[(size_t) ch];
+            if (msg.isPitchWheel()) c.bend = (msg.getPitchWheelValue() - 8192) / 8191.0f * 48.0f;
+            else if (msg.isChannelPressure()) c.press = msg.getChannelPressureValue() / 127.0f;
+            else if (msg.isController() && msg.getControllerNumber() == 74) c.slide = msg.getControllerValue() / 127.0f;
+            else if (msg.isNoteOn())
+            {
+                c.note = msg.getNoteNumber();
+                c.lineIdx = nextLine < (int) order.size() ? order[(size_t) nextLine++] : -1;
+                ++notesSeen;
+                if (++usedCount[(size_t) ch] > 1) ++chanReuse;
+                auto& l = pat.lines[(size_t) c.lineIdx];
+                // the channel must already be reset to THIS note's own state when it starts
+                if (std::abs (c.press - l.pressureAt (l.start())) < 0.01f && std::abs (c.slide - l.slideAt (l.start())) < 0.01f) ++resetsOk;
+            }
+            else if (msg.isNoteOff()) { c.note = -1; c.lineIdx = -1; }
+
+            // after each event, compare every sounding channel with its line
+            for (int k = 2; k <= 15; ++k)
+            {
+                auto& s2 = chs[(size_t) k];
+                if (s2.note < 0 || s2.lineIdx < 0) continue;
+                auto& l = pat.lines[(size_t) s2.lineIdx];
+                if (beat < l.start() + 1.0 / 192.0 || beat > l.end() - 1.0 / 192.0) continue;
+                const float want = l.pitchAt (beat) + sol::roll::RollEngine::wobble (pat, l, beat);
+                worstPitch = jmax (worstPitch, std::abs ((float) s2.note + s2.bend - want));
+                worstPress = jmax (worstPress, std::abs (s2.press - l.pressureAt (beat)));
+                worstSlide = jmax (worstSlide, std::abs (s2.slide - l.slideAt (beat)));
+            }
+        }
+        CHECK (notesSeen == 18, "all 18 notes are in the file (" + String (notesSeen) + ")");
+        CHECK (chanReuse > 0, "channels get reused when there are more notes than channels");
+        CHECK (resetsOk == 18, "every note starts with its own pressure and slide - nothing left over from the last note (" + String (resetsOk) + "/18)");
+        CHECK (worstPitch < 0.09f, "bends in the file match the drawn lines, wobble included (worst " + String (worstPitch, 3) + " st)");
+        CHECK (worstPress < 0.06f && worstSlide < 0.06f, "pressure and slide match (worst " + String (worstPress, 3) + " / " + String (worstSlide, 3) + ")");
+
+        // and played back into Sol Intent, the bent note sounds where it should
+        p.stopAllSound(); p.roll.stop(); render (p, out, m, 2, bs);
+        p.rescanLibrary();
+        p.loadNow (0, p.getInstrumentList()[(size_t) jmax (0, p.findInList (root.getChildFile ("Long Tone")))]);
+        for (auto id : { "bOn", "cOn", "dOn", "morphOn" }) p.params.getParameter (id)->setValueNotifyingHost (0.0f);
+        render (p, out, m, 2, bs);
+        sol::roll::Pattern one;
+        sol::roll::Line ln; ln.id = one.nextId++;
+        ln.nodes = { { 0.0, 60.0f, 0.0f }, { 2.0, 72.0f, 0.0f }, { 6.0, 72.0f, 0.0f } };
+        one.lines.push_back (ln); one.lengthBeats = 8.0;
+        auto seq1 = sol::gui::RollPage::buildMidi (one, 120.0);
+        const double samplesPerTick = sr * 0.5 / 960.0;   // 120 bpm
+        int ev = 0;
+        const int total = (int) (sr * 1.5 / bs) + 20;
+        capture.clear();
+        for (int b = 0; b < total; ++b)
+        {
+            while (ev < seq1.getNumEvents())
+            {
+                auto msg = seq1.getEventPointer (ev)->message;
+                const int at = (int) (msg.getTimeStamp() * samplesPerTick) - b * bs;
+                if (at >= bs) break;
+                if (! msg.isMetaEvent()) m.addEvent (msg, jmax (0, at));
+                ++ev;
+            }
+            p.processBlock (out, m); m.clear();
+            if (b >= total - 20) for (int c2 = 0; c2 < 2; ++c2) capture.copyFrom (c2, (b - (total - 20)) * bs, out, c2, 0, bs);
+        }
+        int zc = 0;
+        for (int i = 1000; i < bs * 20; ++i) if (capture.getSample (0, i - 1) < 0.0f && capture.getSample (0, i) >= 0.0f) ++zc;
+        const double hz = zc / ((bs * 20 - 1000) / sr);
+        CHECK (std::abs (hz - 523.25) < 20.0, "the exported MIDI played back into Sol Intent bends C3 up to C4 (" + String (hz, 0) + " Hz)");
+        m.addEvent (MidiMessage::allNotesOff (2), 0);
+        p.stopAllSound(); render (p, out, m, 2, bs);
+        mf.deleteFile();
+    }
+
     std::cout << (failures == 0 ? "\nALL PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");
     return failures == 0 ? 0 : 1;
 }

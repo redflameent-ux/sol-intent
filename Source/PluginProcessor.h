@@ -34,6 +34,7 @@ public:
     bool acceptsMidi() const override  { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
+    bool supportsMPE() const override { return true; }   // tells Logic to send each note on its own channel
     double getTailLengthSeconds() const override { return 30.0; }
 
     int getNumPrograms() override { return 1; }

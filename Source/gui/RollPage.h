@@ -89,6 +89,10 @@ public:
     void audition (float pitch, float vel = 0.8f);
     void stopAudition();
     void setHint (const juce::String& h) { hint = h; repaint (statusArea); }
+
+    // the pattern as MPE MIDI, exactly as it plays (also used by the tests)
+    static juce::MidiMessageSequence buildMidi (const roll::Pattern&, double bpm, int* droppedNotes = nullptr);
+    juce::File writeMidiFile (const juce::File&, int* droppedNotes = nullptr) const;
     roll::RollEngine& engine;
     float ringLevel (int note) const;     // how loud that note is ringing right now (0..1), like the ring display
 
@@ -111,6 +115,18 @@ private:
 
     SolIntentProcessor& proc;
     RollCanvas canvas { *this };
+
+    struct DragMidi : juce::Component, juce::SettableTooltipClient
+    {
+        explicit DragMidi (RollPage& o) : owner (o) { setMouseCursor (juce::MouseCursor::DraggingHandCursor); }
+        void paint (juce::Graphics&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
+        void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+        void mouseExit (const juce::MouseEvent&) override { repaint(); }
+        RollPage& owner;
+        bool dragging = false;
+    } dragMidi { *this };
 
     juce::TextButton drawBtn { "Draw" }, selectBtn { "Select" }, cutBtn { "Cut" }, copyBtn { "Copy" }, pasteBtn { "Paste" },
                      undoBtn { "Undo" }, redoBtn { "Redo" }, openBtn { "Open" }, saveBtn { "Save" }, loopBtn { "Loop" },
