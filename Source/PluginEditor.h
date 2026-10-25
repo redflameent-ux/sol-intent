@@ -5,18 +5,19 @@
 
 namespace ui
 {
-    // Palette: black star field with a faint violet nebula, amber-gold light, cyan glow, cream lettering.
+    // Palette (matches the logo): black star field with a faint green and indigo nebula, gold light,
+    // emerald glow, indigo accent, cream lettering.
     // Panels are almost solid so the stars sit around them, not on top of the controls.
-    const juce::Colour bg       { 0xff05060c };
-    const juce::Colour panel    { 0xf40b0e1a };
-    const juce::Colour panelHi  { 0xff151a2d };
-    const juce::Colour line     { 0xff262c44 };
-    const juce::Colour gold     { 0xffe8a64c };   // amber gold
-    const juce::Colour goldDim  { 0xff9a6a35 };
-    const juce::Colour violet   { 0xffb45cff };   // magenta-violet
-    const juce::Colour teal     { 0xff3fe6f2 };   // cyan glow
+    const juce::Colour bg       { 0xff040604 };
+    const juce::Colour panel    { 0xf40a0f0b };
+    const juce::Colour panelHi  { 0xff131c16 };
+    const juce::Colour line     { 0xff24332a };
+    const juce::Colour gold     { 0xfff0b445 };   // sun gold
+    const juce::Colour goldDim  { 0xff9a7035 };
+    const juce::Colour violet   { 0xff6f5cff };   // indigo accent
+    const juce::Colour teal     { 0xff4fe08a };   // emerald glow
     const juce::Colour text     { 0xfff3e6cc };   // cream
-    const juce::Colour textDim  { 0xff8a8fa8 };
+    const juce::Colour textDim  { 0xff8a9a8c };
 
     juce::String u8 (const char*);   // UTF-8 literal helper
 
@@ -85,7 +86,7 @@ private:
     std::vector<Speck> specks;
     std::vector<Exhale> exhales;
     float breathIn = 0.0f;               // how much light is gathered in the centre (0..1)
-    juce::Colour breathCol { 0xff3fe6f2 };
+    juce::Colour breathCol { 0xff4fe08a };
     double lastTick = 0.0;
     juce::Random rng;
     static float charge (float seconds) { return 1.0f - std::exp (-seconds / 3.5f); }   // longer hold = deeper breath

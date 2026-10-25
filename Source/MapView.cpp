@@ -738,7 +738,7 @@ void MapView::paint (Graphics& g)
     {
         static const bool black[] = { 0,1,0,1,0,0,1,0,1,0,1,0 };
         auto kr = Rectangle<float> (xForKey (k), kb.getY(), xForKey (k + 1) - xForKey (k), kb.getHeight()).reduced (0.3f, 0);
-        g.setColour (black[k % 12] ? Colour (0xff2a2532) : Colour (0xffbdb5a6));
+        g.setColour (black[k % 12] ? Colour (0xff25322a) : Colour (0xffbdb5a6));
         if (proc.keyboardState.isNoteOnForChannels (0xffff, k)) g.setColour (ui::teal);
         g.fillRect (kr);
     }

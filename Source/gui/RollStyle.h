@@ -6,19 +6,19 @@ namespace sol::gui
 {
 namespace col
 {
-    const juce::Colour bg        { 0xff070a14 };
-    const juce::Colour panel     { 0xff0b0e1a };
-    const juce::Colour panelHi   { 0xff151a2d };
-    const juce::Colour border    { 0xff262c44 };
+    const juce::Colour bg        { 0xff060a07 };
+    const juce::Colour panel     { 0xff0a0f0b };
+    const juce::Colour panelHi   { 0xff131c16 };
+    const juce::Colour border    { 0xff24332a };
     const juce::Colour text      { 0xfff3e6cc };   // cream
-    const juce::Colour dim       { 0xff8a8fa8 };
-    const juce::Colour track     { 0xff262c44 };
-    const juce::Colour wavetable { 0xff3fe6f2 };   // the lines: cyan glow
-    const juce::Colour analog    { 0xffe8a64c };   // velocity: amber gold
-    const juce::Colour granular  { 0xffb45cff };
+    const juce::Colour dim       { 0xff8a9a8c };
+    const juce::Colour track     { 0xff24332a };
+    const juce::Colour wavetable { 0xff4fe08a };   // the lines: emerald glow
+    const juce::Colour analog    { 0xfff0b445 };   // velocity: sun gold
+    const juce::Colour granular  { 0xff6f5cff };
     const juce::Colour resonator { 0xffe07a4f };
     const juce::Colour sampler   { 0xfff3e6cc };   // selection: bright cream
-    const juce::Colour mod       { 0xffb45cff };   // slide: violet
+    const juce::Colour mod       { 0xff6f5cff };   // slide: indigo
     const juce::Colour filter    { 0xffef5d8d };   // record
     const juce::Colour fx        { 0xff6d9bff };
 }

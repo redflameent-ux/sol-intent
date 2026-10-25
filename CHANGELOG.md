@@ -2,6 +2,12 @@
 
 Newest changes first. Every build is on the [Releases page](../../releases/tag/latest).
 
+## 0.10 (25 Oct 2026): Logo and new colours
+- The Sol Intent logo now sits in the top left of the plugin.
+- The sun from the logo is the app icon for the standalone version.
+- New colours to match the logo: gold, emerald green and black, with indigo as an accent.
+- The circle-of-fifths colours (ring display and ROLL lines) now run from green through gold, with indigo as an accent.
+
 ## 0.9 (25 Oct 2026): Longer rings
 - The demo bowl now rings for about 22 seconds and fades out gently. Before, it cut off early.
 - Wider envelope limits: Attack up to 20 s, Decay up to 60 s, Release up to 60 s.

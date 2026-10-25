@@ -39,9 +39,12 @@ set(SOL_DEFS
     JUCE_USE_OGGVORBIS=1
     JUCE_DISPLAY_SPLASH_SCREEN=0)
 
+juce_add_binary_data(SolAssets SOURCES Resources/logo.png)
+
 set(SOL_LIBS
     juce::juce_audio_utils
-    juce::juce_audio_formats)
+    juce::juce_audio_formats
+    SolAssets)
 
 # Change PRODUCT_NAME here to rename the plugin everywhere.
 juce_add_plugin(SolIntent
@@ -50,6 +53,7 @@ juce_add_plugin(SolIntent
     PLUGIN_CODE SolB
     FORMATS VST3 AU Standalone
     PRODUCT_NAME "Sol Intent"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/Resources/icon.png"
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT FALSE

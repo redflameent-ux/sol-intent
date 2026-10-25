@@ -1,5 +1,6 @@
 // The main window: header with presets, layer slots + library on the left, PLAY / MAP in the middle,
 // sound shaping on the right, keyboard along the bottom.
+#include <BinaryData.h>
 #include "PluginEditor.h"
 
 using namespace juce;
@@ -84,7 +85,7 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     keyboard.setKeyWidth (16.0f);
     keyboard.setAvailableRange (12, 108);
     keyboard.setScrollButtonsVisible (false);
-    keyboard.setColour (MidiKeyboardComponent::keySeparatorLineColourId, Colour (0xff3a3442));
+    keyboard.setColour (MidiKeyboardComponent::keySeparatorLineColourId, Colour (0xff34423a));
     keyboard.setColour (MidiKeyboardComponent::shadowColourId, Colours::transparentBlack);
     keyboard.setColour (MidiKeyboardComponent::upDownButtonBackgroundColourId, ui::panelHi);
     keyboard.setColour (MidiKeyboardComponent::upDownButtonArrowColourId, ui::gold);
@@ -154,7 +155,7 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
 
     refreshList();
     showView (0);
-    setSize (1200, 790);
+    setSize (1200, 798);
     startTimerHz (30);
 }
 
@@ -177,10 +178,10 @@ static Image makeStarField (int w, int h)
         g.setGradientFill (ColourGradient (c, cx, cy, c.withAlpha (0.0f), cx + r, cy, true));
         g.fillEllipse (cx - r, cy - r, r * 2, r * 2);
     };
-    cloud ((float) w * 0.18f, (float) h * 0.25f, (float) w * 0.45f, Colour (0x445b2bd6));
-    cloud ((float) w * 0.80f, (float) h * 0.75f, (float) w * 0.40f, Colour (0x38b0308c));
-    cloud ((float) w * 0.55f, (float) h * 0.35f, (float) w * 0.30f, Colour (0x2a1c6fc9));
-    cloud ((float) w * 0.35f, (float) h * 0.90f, (float) w * 0.30f, Colour (0x26c27a2a));
+    cloud ((float) w * 0.18f, (float) h * 0.25f, (float) w * 0.45f, Colour (0x404b3bd6));
+    cloud ((float) w * 0.80f, (float) h * 0.75f, (float) w * 0.40f, Colour (0x341f8a4a));
+    cloud ((float) w * 0.55f, (float) h * 0.35f, (float) w * 0.30f, Colour (0x2a1c7a52));
+    cloud ((float) w * 0.35f, (float) h * 0.90f, (float) w * 0.30f, Colour (0x26c28a2a));
 
     // stars
     Random rng (7);
@@ -207,14 +208,17 @@ void SolIntentEditor::paint (Graphics& g)
         starField = makeStarField (getWidth(), getHeight());
     g.drawImageAt (starField, 0, 0);
 
-    g.setColour (ui::teal.withAlpha (0.25f));
-    g.setFont (FontOptions (24.0f, Font::bold));
-    g.drawText ("SOL INTENT", 23, 15, 200, 30, Justification::centredLeft);
-    g.setColour (ui::text);
-    g.drawText ("SOL INTENT", 22, 14, 200, 30, Justification::centredLeft);
+    // logo, top left
+    static const Image logo = ImageCache::getFromMemory (BinaryData::logo_png, BinaryData::logo_pngSize);
+    auto logoBox = Rectangle<float> (16.0f, 3.0f, 0.0f, 62.0f);
+    if (logo.isValid())
+    {
+        logoBox.setWidth (logoBox.getHeight() * (float) logo.getWidth() / (float) logo.getHeight());
+        g.drawImage (logo, logoBox, RectanglePlacement::centred);
+    }
     g.setColour (ui::textDim);
     g.setFont (FontOptions (11.5f));
-    g.drawText ("resonance sampler", 168, 23, 130, 18, Justification::centredLeft);
+    g.drawText ("resonance sampler", (int) logoBox.getRight() + 12, 26, 130, 18, Justification::centredLeft);
 
     auto panelBox = [&g] (Rectangle<int> r)
     {
@@ -261,7 +265,7 @@ void SolIntentEditor::resized()
     auto area = getLocalBounds().reduced (14);
 
     // header
-    auto top = area.removeFromTop (44).withTrimmedTop (4).withHeight (32);
+    auto top = area.removeFromTop (52).withTrimmedTop (8).withHeight (32);
     stopButton.setBounds (top.removeFromRight (78));
     top.removeFromRight (6);
     rescanButton.setBounds (top.removeFromRight (72));
@@ -792,7 +796,7 @@ void SolIntentEditor::timerCallback()
         status = proc.getStatus();
     if (status.isEmpty())
         status = mapMode ? "Click a recording to edit it. Play a key, then Root = last key to set where it sits."
-                         : ui::u8 ("Cyan dots mark keys with a real recording. Pitch bend reaches \xc2\xb1")
+                         : ui::u8 ("Green dots mark keys with a real recording. Pitch bend reaches \xc2\xb1")
                            + String ((int) proc.params.getRawParameterValue ("bendRange")->load())
                            + " semitones. Right-click any knob to link it to your controller.";
     if (statusLabel.getText() != status) statusLabel.setText (status, dontSendNotification);

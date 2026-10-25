@@ -24,13 +24,13 @@ static const Colour slideCol = col::mod;
 static const Colour velCol   = col::analog;
 
 // The same colours as the ring display: each note's place on the circle of fifths,
-// cyan -> violet -> gold, so notes that sound good together have neighbouring colours.
+// emerald -> gold -> indigo, so notes that sound good together have neighbouring colours.
 static Colour noteColour (float pitch)
 {
     const int n = ((int) std::round (pitch) % 12 + 12) % 12;
     const float t = (float) ((n * 7) % 12) / 11.0f;
-    return t < 0.5f ? col::wavetable.interpolatedWith (col::granular, t * 2.0f)
-                    : col::granular.interpolatedWith (col::analog, (t - 0.5f) * 2.0f);
+    return t < 0.64f ? col::wavetable.interpolatedWith (col::analog, t / 0.64f)
+                     : col::analog.interpolatedWith (col::granular, (t - 0.64f) / 0.36f);
 }
 
 // ============================================================================ canvas

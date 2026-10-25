@@ -368,9 +368,9 @@ void ParamKnob::refreshLearnState()
 // ============================================================================ ripple display
 static Colour fifthsColour (int n)
 {
-    const float hue = (float) (((n % 12) * 7) % 12) / 11.0f;   // cyan -> violet -> gold around the circle of fifths
-    return hue < 0.5f ? ui::teal.interpolatedWith (ui::violet, hue * 2.0f)
-                      : ui::violet.interpolatedWith (ui::gold, (hue - 0.5f) * 2.0f);
+    const float hue = (float) (((n % 12) * 7) % 12) / 11.0f;   // emerald -> gold -> indigo around the circle of fifths
+    return hue < 0.64f ? ui::teal.interpolatedWith (ui::gold, hue / 0.64f)
+                       : ui::gold.interpolatedWith (ui::violet, (hue - 0.64f) / 0.36f);
 }
 
 void ResonanceView::tick()
@@ -490,9 +490,7 @@ void ResonanceView::paint (Graphics& g)
         }
         ring.closeSubPath();
         const int fifth = ((n % 12) * 7) % 12;   // where this note sits on the circle of fifths
-        const float hue = (float) fifth / 11.0f;   // cyan -> violet -> gold around the circle
-        auto col = hue < 0.5f ? ui::teal.interpolatedWith (ui::violet, hue * 2.0f)
-                              : ui::violet.interpolatedWith (ui::gold, (hue - 0.5f) * 2.0f);
+        auto col = fifthsColour (n);
         g.setColour (col.withAlpha (0.10f + 0.15f * v));
         g.strokePath (ring, PathStrokeType (5.0f + 4.0f * v));
         g.setColour (col.withAlpha (0.35f + 0.6f * v));
@@ -651,7 +649,7 @@ void PadGrid::release()
 void TintedKeyboard::drawWhiteNote (int n, Graphics& g, Rectangle<float> area, bool down, bool over, Colour lineCol, Colour)
 {
     auto c = isKeyswitch (n) ? ui::violet.withSaturation (0.45f).brighter (0.6f)
-                             : inRange (n) ? Colour (0xffeee3cf) : Colour (0xff4d566b);
+                             : inRange (n) ? Colour (0xffeee3cf) : Colour (0xff4d5b52);
     if (over) c = c.brighter (0.1f);
     if (down) c = ui::teal;
     g.setColour (c);
@@ -660,7 +658,7 @@ void TintedKeyboard::drawWhiteNote (int n, Graphics& g, Rectangle<float> area, b
     g.fillRect (area.withWidth (1.0f));
     if (art != nullptr && art->hasRootAt (n))
     {
-        g.setColour (Colour (0xff0f8fa0));
+        g.setColour (Colour (0xff1f8f55));
         g.fillEllipse (Rectangle<float> (5, 5).withCentre ({ area.getCentreX(), area.getBottom() - 8 }));
     }
     if (n % 12 == 0)
@@ -673,7 +671,7 @@ void TintedKeyboard::drawWhiteNote (int n, Graphics& g, Rectangle<float> area, b
 
 void TintedKeyboard::drawBlackNote (int n, Graphics& g, Rectangle<float> area, bool down, bool over, Colour)
 {
-    auto c = isKeyswitch (n) ? ui::violet.darker (0.4f) : inRange (n) ? Colour (0xff0b1220) : Colour (0xff27304a);
+    auto c = isKeyswitch (n) ? ui::violet.darker (0.4f) : inRange (n) ? Colour (0xff0b120d) : Colour (0xff27352c);
     if (over) c = c.brighter (0.2f);
     if (down) c = ui::teal.darker (0.3f);
     g.setColour (c);
