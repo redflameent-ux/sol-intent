@@ -72,11 +72,24 @@ class ResonanceView : public juce::Component
 public:
     explicit ResonanceView (SolIntentProcessor& p) : proc (p) {}
     void paint (juce::Graphics&) override;
-    void tick() { phase += 0.035f; repaint(); }
+    void tick();
     juce::String title, subtitle;
 private:
     SolIntentProcessor& proc;
     float phase = 0.0f;
+
+    // breathing: holding a note breathes light in towards the centre; letting go breathes it out
+    struct Speck { float angle, radius, speed, life, maxLife, size; juce::Colour col; bool inward; };
+    struct Exhale { float strength, age, duration; juce::Colour col; };
+    std::array<float, 128> held {};      // seconds each note has been held
+    std::vector<Speck> specks;
+    std::vector<Exhale> exhales;
+    float breathIn = 0.0f;               // how much light is gathered in the centre (0..1)
+    juce::Colour breathCol { 0xff3fe6f2 };
+    double lastTick = 0.0;
+    juce::Random rng;
+    static float charge (float seconds) { return 1.0f - std::exp (-seconds / 3.5f); }   // longer hold = deeper breath
+    static float noteAngle (int note) { return juce::MathConstants<float>::twoPi * (float) (((note % 12) * 7) % 12) / 12.0f; }
 };
 
 // ---------------------------------------------------------------------------- XY morph pad

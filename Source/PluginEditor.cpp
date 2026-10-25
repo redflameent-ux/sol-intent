@@ -366,6 +366,71 @@ void ParamKnob::refreshLearnState()
 }
 
 // ============================================================================ ripple display
+static Colour fifthsColour (int n)
+{
+    const float hue = (float) (((n % 12) * 7) % 12) / 11.0f;   // cyan -> violet -> gold around the circle of fifths
+    return hue < 0.5f ? ui::teal.interpolatedWith (ui::violet, hue * 2.0f)
+                      : ui::violet.interpolatedWith (ui::gold, (hue - 0.5f) * 2.0f);
+}
+
+void ResonanceView::tick()
+{
+    const double now = Time::getMillisecondCounterHiRes() * 0.001;
+    const float dt = lastTick > 0.0 ? (float) jlimit (0.0, 0.1, now - lastTick) : 1.0f / 30.0f;
+    lastTick = now;
+    phase += 0.035f;
+
+    float deepest = 0.0f;
+    Colour deepestCol = breathCol;
+    for (int n = 0; n < 128; ++n)
+    {
+        const bool on = proc.keyboardState.isNoteOnForChannels (0xffff, n);
+        if (on)
+        {
+            // breathing in: light drifts from the note's place on the ring towards the centre
+            held[(size_t) n] += dt;
+            const float ch = charge (held[(size_t) n]);
+            if (ch > deepest) { deepest = ch; deepestCol = fifthsColour (n); }
+            const float spawnRate = 8.0f + 26.0f * ch;
+            for (float k = rng.nextFloat(); k < spawnRate * dt; k += 1.0f)
+                if (specks.size() < 700)
+                    specks.push_back ({ noteAngle (n) + (rng.nextFloat() - 0.5f) * 0.5f, 1.05f + rng.nextFloat() * 0.1f,
+                                        0.18f + 0.25f * rng.nextFloat(), 0.0f, 6.0f, 1.0f + 1.8f * rng.nextFloat(),
+                                        rng.nextFloat() < 0.4f ? Colours::white : fifthsColour (n), true });
+        }
+        else if (held[(size_t) n] > 0.0f)
+        {
+            // breathing out: the longer it was held, the bigger, brighter and longer the release
+            const float strength = jmax (0.15f, charge (held[(size_t) n]));
+            exhales.push_back ({ strength, 0.0f, 0.8f + 3.2f * strength, fifthsColour (n) });
+            const int burst = (int) (20 + 110 * strength);
+            for (int k = 0; k < burst && specks.size() < 900; ++k)
+                specks.push_back ({ rng.nextFloat() * MathConstants<float>::twoPi, 0.04f + 0.08f * rng.nextFloat(),
+                                    (0.25f + 0.75f * rng.nextFloat()) * (0.5f + strength), 0.0f, 0.9f + 3.0f * strength * rng.nextFloat(),
+                                    1.0f + 2.5f * rng.nextFloat() * strength,
+                                    rng.nextFloat() < 0.5f ? Colours::white : fifthsColour (n), false });
+            held[(size_t) n] = 0.0f;
+        }
+    }
+
+    // the gathered light swells slowly while held and is let go quickly on release
+    if (deepest > breathIn) breathIn += (deepest - breathIn) * jmin (1.0f, dt * 2.0f);
+    else                    breathIn += (deepest - breathIn) * jmin (1.0f, dt * 6.0f);
+    if (deepest > 0.0f) breathCol = breathCol.interpolatedWith (deepestCol, jmin (1.0f, dt * 3.0f));
+
+    for (auto& s : specks)
+    {
+        s.life += dt;
+        if (s.inward) { s.radius -= s.speed * dt * (0.6f + 0.6f * s.radius); s.angle += 0.35f * dt; }   // gentle spiral in
+        else          { s.radius += s.speed * dt; s.speed *= std::pow (0.6f, dt); s.angle -= 0.15f * dt; }
+    }
+    specks.erase (std::remove_if (specks.begin(), specks.end(), [] (const Speck& s)
+                  { return s.life > s.maxLife || (s.inward && s.radius < 0.06f) || (! s.inward && s.radius > 1.35f); }), specks.end());
+    for (auto& e : exhales) e.age += dt;
+    exhales.erase (std::remove_if (exhales.begin(), exhales.end(), [] (const Exhale& e) { return e.age > e.duration; }), exhales.end());
+    repaint();
+}
+
 void ResonanceView::paint (Graphics& g)
 {
     auto b = getLocalBounds().toFloat();
@@ -411,7 +476,8 @@ void ResonanceView::paint (Graphics& g)
         float v = proc.noteGlow[(size_t) n].load();
         if (v < 0.0008f) continue;
         v = jlimit (0.0f, 1.0f, std::sqrt (v * 3.0f));
-        const float rad = R * (0.18f + 0.78f * jlimit (0.0f, 1.0f, (float) (n - 24) / 72.0f));
+        const float rad = R * (0.18f + 0.78f * jlimit (0.0f, 1.0f, (float) (n - 24) / 72.0f))
+                        * (1.0f - 0.14f * charge (held[(size_t) n]));   // the ring draws in while the note is held
         const int lobes = 3 + n % 12;
         const float amp = 2.0f + 7.0f * v;
         Path ring;
@@ -435,6 +501,52 @@ void ResonanceView::paint (Graphics& g)
         auto dot = c.getPointOnCircumference (R - 5.0f, MathConstants<float>::twoPi * (float) fifth / 12.0f);
         g.setColour (col.withAlpha (0.4f + 0.6f * v));
         g.fillEllipse (Rectangle<float> (5.0f + 5.0f * v, 5.0f + 5.0f * v).withCentre (dot));
+    }
+
+    // ---- breath ----
+    // breathing out: bright waves flowing from the centre past the ring
+    for (auto& e : exhales)
+    {
+        const float t = e.age / e.duration;
+        const float ease = 1.0f - std::pow (1.0f - t, 2.2f);
+        const float rad = R * (0.08f + 1.15f * ease);
+        const float fade = std::pow (1.0f - t, 1.4f) * e.strength;
+        if (t < 0.35f)   // the first rush of light out of the centre
+        {
+            const float flash = std::pow (1.0f - t / 0.35f, 2.0f) * e.strength;
+            g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.55f * flash), c.x, c.y, e.col.withAlpha (0.0f), c.x + R * (0.25f + 0.6f * ease), c.y, true));
+            g.fillEllipse (Rectangle<float> (R * 2.0f, R * 2.0f).withCentre (c));
+        }
+        g.setColour (e.col.withAlpha (0.18f * fade));
+        g.drawEllipse (Rectangle<float> (rad * 2, rad * 2).withCentre (c), 4.0f + 14.0f * fade);
+        g.setColour (e.col.brighter (0.5f).withAlpha (0.75f * fade));
+        g.drawEllipse (Rectangle<float> (rad * 2, rad * 2).withCentre (c), 1.0f + 2.5f * fade);
+    }
+
+    // breathing in: the light field draws inwards and gathers into a brightening core
+    if (breathIn > 0.01f)
+    {
+        const float pull = R * (1.0f - 0.75f * breathIn);   // a soft edge closing in
+        g.setColour (breathCol.withAlpha (0.10f + 0.25f * breathIn));
+        g.drawEllipse (Rectangle<float> (pull * 2, pull * 2).withCentre (c), 1.0f + 2.0f * breathIn);
+        const float core = R * (0.05f + 0.16f * breathIn);
+        g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.25f + 0.6f * breathIn), c.x, c.y,
+                                           breathCol.withAlpha (0.0f), c.x + core * 2.2f, c.y, true));
+        g.fillEllipse (Rectangle<float> (core * 4.4f, core * 4.4f).withCentre (c));
+    }
+
+    // glitter specks riding the breath
+    for (auto& s : specks)
+    {
+        const float lifeFade = jmin (1.0f, s.life * 4.0f) * jlimit (0.0f, 1.0f, (s.maxLife - s.life) * 1.5f);
+        const float twinkle = 0.55f + 0.45f * std::sin (phase * 9.0f + s.angle * 13.0f + s.size * 5.0f);
+        const float a = lifeFade * twinkle * (s.inward ? jmin (1.0f, s.radius * 2.0f) : 1.0f);
+        if (a < 0.03f) continue;
+        auto p = c.getPointOnCircumference (R * s.radius, s.angle);
+        g.setColour (s.col.withAlpha (0.22f * a));
+        g.fillEllipse (Rectangle<float> (s.size * 3.2f, s.size * 3.2f).withCentre (p));
+        g.setColour (s.col.withAlpha (a));
+        g.fillEllipse (Rectangle<float> (s.size, s.size).withCentre (p));
     }
 
     g.setColour (ui::text);

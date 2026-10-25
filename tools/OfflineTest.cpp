@@ -66,6 +66,29 @@ static int snapshot (const File& png)
     };
     save (png);
 
+    // breathing: hold a chord (breath in), then let go (breath out)
+    {
+        auto runFor = [&] (double seconds)
+        {
+            const int frames = (int) (seconds * 30.0);
+            for (int f = 0; f < frames; ++f)
+            {
+                for (int b = 0; b < 3; ++b) { p.processBlock (out, m); m.clear(); }
+                MessageManager::getInstance()->runDispatchLoopUntil (33);
+            }
+        };
+        p.keyboardState.allNotesOff (1);
+        runFor (2.5);
+        for (int n : { 48, 55, 60, 64 }) p.keyboardState.noteOn (1, n, 0.9f);
+        runFor (3.5);
+        save (png.getSiblingFile ("ui_breath_in.png"));
+        for (int n : { 48, 55, 60, 64 }) p.keyboardState.noteOff (1, n, 0.0f);
+        runFor (0.35);
+        save (png.getSiblingFile ("ui_breath_out.png"));
+        runFor (1.2);
+        save (png.getSiblingFile ("ui_breath_out2.png"));
+    }
+
     // second shot: an instrument with articulations
     int drum = p.findInList (File::getSpecialLocation (File::tempDirectory).getChildFile ("sol_test_lib/Frame Drum"));
     if (drum > 0) p.selectInstrument (0, drum);
