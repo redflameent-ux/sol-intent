@@ -23,6 +23,16 @@ static const Colour pressCol = Colour (0xff4f8dff);
 static const Colour slideCol = col::mod;
 static const Colour velCol   = col::analog;
 
+// The same colours as the ring display: each note's place on the circle of fifths,
+// cyan -> violet -> gold, so notes that sound good together have neighbouring colours.
+static Colour noteColour (float pitch)
+{
+    const int n = ((int) std::round (pitch) % 12 + 12) % 12;
+    const float t = (float) ((n * 7) % 12) / 11.0f;
+    return t < 0.5f ? col::wavetable.interpolatedWith (col::granular, t * 2.0f)
+                    : col::granular.interpolatedWith (col::analog, (t - 0.5f) * 2.0f);
+}
+
 // ============================================================================ canvas
 RollCanvas::RollCanvas (RollPage& p) : page (p)
 {
@@ -51,7 +61,7 @@ Rectangle<int> RollCanvas::gridArea() const
 Rectangle<float> RollCanvas::legendArea() const
 {
     auto g = gridArea().toFloat();
-    return { g.getRight() - 92.0f, g.getY() + 6.0f, 84.0f, 64.0f };
+    return { g.getRight() - 92.0f, g.getY() + 6.0f, 84.0f, 78.0f };
 }
 
 float RollCanvas::rowHeight() const { return (float) gridArea().getHeight() / viewPitches; }
@@ -217,7 +227,7 @@ void RollCanvas::paint (Graphics& g)
         for (auto& l : m.lines)
         {
             const bool sel = page.selection.count (l.id) > 0;
-            const Colour c = sel ? selCol : lineCol;
+            const Colour c = sel ? selCol : noteColour (l.startPitch());
 
             // ---- automation, drawn as soft ribbons around each line ----
             const float lx0 = xForBeat (l.start()), lx1 = xForBeat (l.end());
@@ -284,10 +294,94 @@ void RollCanvas::paint (Graphics& g)
                 g.strokePath (linePath (l, true), PathStrokeType (1.0f));
             }
             auto path = linePath (l, false);
-            g.setColour (c.withAlpha (0.18f));
-            g.strokePath (path, PathStrokeType (7.0f, PathStrokeType::curved, PathStrokeType::rounded));
+            const double playBeat = page.engine.playheadBeat.load();
+            const bool sounding = page.engine.transportRunning.load() && playBeat >= l.start() && playBeat < l.end();
+
+            // how loud this note is actually ringing (strike = bright, then it fades as the bowl dies away)
+            const float ring = sounding ? page.ringLevel (juce::jlimit (0, 127, roundToInt (l.startPitch()))) : 0.0f;
+
+            // glow: soft layers fading outwards, swelling with the sound
+            const float boost = 1.0f + 2.2f * ring;
+            const float widths[] = { 16.0f, 10.0f, 6.0f };
+            const float alphas[] = { 0.035f, 0.07f, 0.14f };
+            for (int k = 0; k < 3; ++k)
+            {
+                g.setColour (c.withAlpha (jmin (1.0f, alphas[k] * boost)));
+                g.strokePath (path, PathStrokeType (widths[k] * (1.0f + 0.4f * ring), PathStrokeType::curved, PathStrokeType::rounded));
+            }
+
+            // while it rings, a rippling halo travels along it - like the rings in the circle of fifths
+            if (ring > 0.01f)
+            {
+                const double tnow = Time::getMillisecondCounterHiRes() * 0.001;
+                const float amp = 2.0f + 6.0f * ring;
+                const int lobes = 3 + ((int) std::round (l.startPitch())) % 12;   // each note ripples its own way
+                for (int side = 0; side < 2; ++side)
+                {
+                    Path ripple;
+                    bool first = true;
+                    const float rx0 = jmax (xForBeat (l.start()), (float) ga.getX()), rx1 = jmin (xForBeat (l.end()), (float) ga.getRight());
+                    for (float x = rx0; x <= rx1; x += 2.0f)
+                    {
+                        const float w = std::sin (x * 0.012f * (float) lobes + (float) tnow * 5.0f * (side == 0 ? 1.0f : -0.7f) + (float) l.id);
+                        const float y = yForPitch (l.pitchAt (beatForX (x))) + (side == 0 ? -1.0f : 1.0f) * amp * (0.6f + 0.4f * w);
+                        if (first) { ripple.startNewSubPath (x, y); first = false; } else ripple.lineTo (x, y);
+                    }
+                    g.setColour (c.withAlpha (0.10f + 0.15f * ring));
+                    g.strokePath (ripple, PathStrokeType (4.0f + 3.0f * ring));
+                    g.setColour (c.withAlpha (0.35f + 0.5f * ring));
+                    g.strokePath (ripple, PathStrokeType (1.0f + 1.2f * ring));
+                }
+            }
             g.setColour (c);
             g.strokePath (path, PathStrokeType (2.2f, PathStrokeType::curved, PathStrokeType::rounded));
+            g.setColour (Colours::white.withAlpha (sounding ? 0.85f : 0.45f));   // hot white core
+            g.strokePath (path, PathStrokeType (0.8f, PathStrokeType::curved, PathStrokeType::rounded));
+
+            // glitter: specks scattered along the line that twinkle on and off
+            if (page.showGlitter)
+            {
+                const double now = Time::getMillisecondCounterHiRes() * 0.001;
+                const float x0 = jmax (xForBeat (l.start()), (float) ga.getX());
+                const float x1 = jmin (xForBeat (l.end()), (float) ga.getRight());
+                const int count = jlimit (0, 120, (int) ((x1 - x0) / (sounding ? 7.0f : 11.0f)));
+                for (int k = 0; k < count; ++k)
+                {
+                    // fixed per speck (so they don't jump around), different for every line
+                    auto hash = [] (juce::uint32 v) { v ^= v >> 16; v *= 0x7feb352du; v ^= v >> 15; v *= 0x846ca68bu; v ^= v >> 16; return (float) (v & 0xffffff) / 16777215.0f; };
+                    const auto seed = (juce::uint32) (l.id * 7919 + k * 104729);
+                    const float px = x0 + hash (seed) * (x1 - x0);
+                    const float drift = (hash (seed + 1) - 0.5f) * 9.0f;
+                    const float speed = 0.6f + hash (seed + 2) * 1.8f;
+                    const float tw = std::sin ((float) now * speed * MathConstants<float>::twoPi + hash (seed + 3) * 6.283f);
+                    const float bright = std::pow (jmax (0.0f, tw), 6.0f) * (0.6f + 0.4f * jmin (1.0f, ring * 2.0f + (sounding ? 0.4f : 0.0f)));
+                    if (bright < 0.04f) continue;
+                    const float py = yForPitch (l.pitchAt (beatForX (px))) + drift;
+                    const float tint = hash (seed + 4);
+                    auto speck = tint < 0.6f ? Colours::white : tint < 0.85f ? c.brighter (0.6f) : velCol.brighter (0.4f);
+                    const float size = 1.2f + 2.4f * bright * (0.5f + hash (seed + 5));
+                    g.setColour (speck.withAlpha (0.25f * bright));
+                    g.fillEllipse (Rectangle<float> (size * 3.0f, size * 3.0f).withCentre ({ px, py }));
+                    g.setColour (speck.withAlpha (bright));
+                    g.fillEllipse (Rectangle<float> (size, size).withCentre ({ px, py }));
+                    if (bright > 0.55f)   // the brightest ones flash into little stars
+                    {
+                        g.setColour (speck.withAlpha (0.6f * bright));
+                        g.drawLine (px - size * 2.2f, py, px + size * 2.2f, py, 0.7f);
+                        g.drawLine (px, py - size * 2.2f, px, py + size * 2.2f, 0.7f);
+                    }
+                }
+            }
+
+            // a bright spark riding the line where it's playing right now
+            if (sounding)
+            {
+                const Point<float> spark (xForBeat (playBeat), yForPitch (l.pitchAt (playBeat)));
+                g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.9f), spark.x, spark.y, c.withAlpha (0.0f), spark.x + 14.0f, spark.y, true));
+                g.fillEllipse (Rectangle<float> (28.0f, 28.0f).withCentre (spark));
+                g.setColour (Colours::white);
+                g.fillEllipse (Rectangle<float> (5.0f, 5.0f).withCentre (spark));
+            }
 
             for (int n = 0; n < (int) l.nodes.size(); ++n)
             {
@@ -314,10 +408,10 @@ void RollCanvas::paint (Graphics& g)
             g.fillRoundedRectangle (lg, 5.0f);
             g.setColour (col::border);
             g.drawRoundedRectangle (lg, 5.0f, 1.0f);
-            const std::pair<const char*, Colour> items[] = { { "Bend", lineCol }, { "Velocity", velCol }, { "Pressure", pressCol }, { "Slide", slideCol } };
-            const bool on[] = { true, page.showVelocity, page.showPressure, page.showSlide };
+            const std::pair<const char*, Colour> items[] = { { "Bend", noteColour (55) }, { "Velocity", velCol }, { "Pressure", pressCol }, { "Slide", slideCol }, { "Glitter", Colours::white } };
+            const bool on[] = { true, page.showVelocity, page.showPressure, page.showSlide, page.showGlitter };
             g.setFont (font (10.0f));
-            for (int i = 0; i < 4; ++i)
+            for (int i = 0; i < 5; ++i)
             {
                 auto row = Rectangle<float> (lg.getX() + 6.0f, lg.getY() + 4.0f + (float) i * 14.0f, lg.getWidth() - 10.0f, 14.0f);
                 auto box = row.removeFromLeft (10.0f).withSizeKeepingCentre (9.0f, 9.0f);
@@ -426,6 +520,7 @@ void RollCanvas::mouseDown (const MouseEvent& e)
         if (row == 1) page.showVelocity = ! page.showVelocity;
         if (row == 2) page.showPressure = ! page.showPressure;
         if (row == 3) page.showSlide = ! page.showSlide;
+        if (row == 4) page.showGlitter = ! page.showGlitter;
         repaint();
         return;
     }
@@ -955,6 +1050,11 @@ void RollPage::refreshControls()
     pasteBtn.setEnabled (! clipboard.empty());
 }
 
+float RollPage::ringLevel (int note) const
+{
+    return jlimit (0.0f, 1.0f, std::sqrt (proc.noteGlow[(size_t) jlimit (0, 127, note)].load() * 3.0f));
+}
+
 double RollPage::gridBeats() const { return gridValues[juce::jlimit (0, 6, gridBox.getSelectedItemIndex())]; }
 
 double RollPage::snapBeat (double b) const
@@ -1275,7 +1375,7 @@ void RollPage::timerCallback()
 {
     if (! isVisible()) return;
     drainRecording();
-    if (engine.transportRunning.load() || engine.playheadBeat.load() >= 0) canvas.repaint();
+    if (engine.transportRunning.load() || engine.playheadBeat.load() >= 0 || (showGlitter && isShowing())) canvas.repaint();
     const bool playing = engine.isInternalPlaying();
     if (playBtn.getToggleState() != playing) refreshControls();
 }

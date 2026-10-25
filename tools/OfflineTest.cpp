@@ -149,6 +149,11 @@ static int snapshot (const File& png)
         p.roll.setPattern (pat);
         for (auto* c : ed->getChildren())
             if (auto* b = dynamic_cast<TextButton*> (c); b != nullptr && b->getButtonText() == "ROLL") b->triggerClick();
+        p.selectInstrument (0, 0);   // the long-ringing demo bowl, so the ripples show
+        for (int i = 0; i < 200 && p.isLoading(); ++i) Thread::sleep (10);
+        p.processBlock (out, m);
+        p.roll.play();
+        for (int b = 0; b < (int) (48000.0 / 512.0 * 4.2); ++b) { p.processBlock (out, m); m.clear(); }   // into bar 3
         MessageManager::getInstance()->runDispatchLoopUntil (400);
         save (png.getSiblingFile ("ui_roll.png"));
     }

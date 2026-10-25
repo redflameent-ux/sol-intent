@@ -81,7 +81,7 @@ public:
     enum class Lane { Pitch, Velocity, Pressure, Slide };
     Lane lane = Lane::Pitch;
     bool snapPitch = true;
-    bool showVelocity = true, showPressure = true, showSlide = true;   // which automation ribbons are drawn
+    bool showVelocity = true, showPressure = true, showSlide = true, showGlitter = true;   // which automation ribbons are drawn
     double gridBeats() const;
     double snapBeat (double b) const;
     void beginEdit();                    // remember for undo
@@ -90,6 +90,7 @@ public:
     void stopAudition();
     void setHint (const juce::String& h) { hint = h; repaint (statusArea); }
     roll::RollEngine& engine;
+    float ringLevel (int note) const;     // how loud that note is ringing right now (0..1), like the ring display
 
 private:
     void timerCallback() override;
