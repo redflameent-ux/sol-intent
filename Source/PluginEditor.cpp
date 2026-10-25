@@ -327,7 +327,8 @@ void ResonanceView::paint (Graphics& g)
     g.drawEllipse (Rectangle<float> (R * 2, R * 2).withCentre (c), 1.0f);
     g.drawEllipse (Rectangle<float> (R * 2 - 10, R * 2 - 10).withCentre (c), 0.6f);
     g.setFont (FontOptions (10.0f));
-    static const char* pcs[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    // circle of fifths: each step clockwise is a fifth up, so notes that sound good together sit side by side
+    static const char* pcs[] = { "C", "G", "D", "A", "E", "B", "F#", "C#", "G#", "D#", "A#", "F" };
     for (int i = 0; i < 12; ++i)
     {
         auto pt = c.getPointOnCircumference (R + 12.0f, MathConstants<float>::twoPi * (float) i / 12.0f);
@@ -359,7 +360,8 @@ void ResonanceView::paint (Graphics& g)
             if (i == 0) ring.startNewSubPath (pt); else ring.lineTo (pt);
         }
         ring.closeSubPath();
-        const float hue = (float) (n % 12) / 11.0f;   // cyan -> violet -> gold around the octave
+        const int fifth = ((n % 12) * 7) % 12;   // where this note sits on the circle of fifths
+        const float hue = (float) fifth / 11.0f;   // cyan -> violet -> gold around the circle
         auto col = hue < 0.5f ? ui::teal.interpolatedWith (ui::violet, hue * 2.0f)
                               : ui::violet.interpolatedWith (ui::gold, (hue - 0.5f) * 2.0f);
         g.setColour (col.withAlpha (0.10f + 0.15f * v));
@@ -367,7 +369,7 @@ void ResonanceView::paint (Graphics& g)
         g.setColour (col.withAlpha (0.35f + 0.6f * v));
         g.strokePath (ring, PathStrokeType (1.0f + 1.5f * v));
 
-        auto dot = c.getPointOnCircumference (R - 5.0f, MathConstants<float>::twoPi * (float) (n % 12) / 12.0f);
+        auto dot = c.getPointOnCircumference (R - 5.0f, MathConstants<float>::twoPi * (float) fifth / 12.0f);
         g.setColour (col.withAlpha (0.4f + 0.6f * v));
         g.fillEllipse (Rectangle<float> (5.0f + 5.0f * v, 5.0f + 5.0f * v).withCentre (dot));
     }
