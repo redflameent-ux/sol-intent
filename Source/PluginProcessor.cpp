@@ -23,7 +23,8 @@ SolIntentProcessor::SolIntentProcessor()
         macroNames[(size_t) m] = "Macro " + juce::String (m + 1);
     }
     P.tone = g ("tone"); P.width = g ("width"); P.revMix = g ("reverbMix"); P.revSize = g ("reverbSize");
-    P.lfoRate = g ("lfoRate"); P.lfoDepth = g ("lfoDepth"); P.lfoTarget = g ("lfoTarget"); P.keyswitch = g ("keyswitch");
+    P.lfoRate = g ("lfoRate"); P.lfoDepth = g ("lfoDepth"); P.lfoRate2 = g ("lfoRate2"); P.lfoDepth2 = g ("lfoDepth2");
+    P.keyswitch = g ("keyswitch");
     for (int i = 0; i < numLayers; ++i)
     {
         P.on[i]  = params.getRawParameterValue (layerParam (i, "On"));
@@ -115,10 +116,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout SolIntentProcessor::createLa
         add (std::make_unique<AudioParameterFloat> (ParameterID { "macro" + String (m), 1 }, "Macro " + String (m), NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
 
     // motion
-    add (std::make_unique<AudioParameterFloat> (ParameterID { "lfoRate", 1 }, "Rate", NormalisableRange<float> (0.05f, 12.0f, 0.01f, 0.4f), 0.5f,
-                                                AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 2) + " Hz"; })));
-    add (std::make_unique<AudioParameterFloat> (ParameterID { "lfoDepth", 1 }, "Depth", NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));
-    add (std::make_unique<AudioParameterChoice> (ParameterID { "lfoTarget", 1 }, "Motion", StringArray { "Pitch", "Volume", "Tone", "Pan", "Morph orbit" }, 1));
+    // two slow waves; what they move is set by right-clicking knobs ("Modulate with")
+    auto hz = AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return String (v, 2) + " Hz"; });
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "lfoRate", 1 }, "Motion 1 Rate", NormalisableRange<float> (0.02f, 12.0f, 0.01f, 0.35f), 0.25f, hz));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "lfoDepth", 1 }, "Motion 1 Amount", NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "lfoRate2", 1 }, "Motion 2 Rate", NormalisableRange<float> (0.02f, 12.0f, 0.01f, 0.35f), 0.07f, hz));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "lfoDepth2", 1 }, "Motion 2 Amount", NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
     add (std::make_unique<AudioParameterChoice> (ParameterID { "keyswitch", 1 }, "Keyswitch", StringArray { "Off", "C-1", "C0", "C1", "C6" }, 2));
 
     // layers
@@ -158,6 +161,7 @@ void SolIntentProcessor::prepareToPlay (double sampleRate, int block)
     reverb.setSampleRate (sampleRate);
     reverb.reset();
     eq.prepare (rate);
+    lfoPhase = lfoPhase2 = 0.0f;
     chorus.prepare (rate);
     echo.prepare (rate);
     toneL.reset(); toneR.reset();
@@ -194,7 +198,7 @@ void SolIntentProcessor::handleMidi (juce::MidiBuffer& in, juce::MidiBuffer& out
         if (m.isController())
         {
             const int cc = m.getControllerNumber();
-            if (cc == 1) modWheel = m.getControllerValue() / 127.0f;
+            if (cc == 1) modWheel = m.getControllerValue() / 127.0f;   // a source you can assign (Modulate with > Mod wheel)
 
             if (int learn = learningIndex.load(); learn >= 0 && cc != 64)   // sustain pedal can't be learned
             {
@@ -209,6 +213,9 @@ void SolIntentProcessor::handleMidi (juce::MidiBuffer& in, juce::MidiBuffer& out
                 continue;   // a learned knob, not a sound control
             }
         }
+
+        if (m.isChannelPressure()) aftertouch = m.getChannelPressureValue() / 127.0f;
+        if (m.isAftertouch())      aftertouch = m.getAfterTouchValue() / 127.0f;
 
         if (ksBase >= 0 && (m.isNoteOn() || m.isNoteOff()) && m.getNoteNumber() >= ksBase && m.getNoteNumber() < ksBase + maxArts)
         {
@@ -256,6 +263,16 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     keyboardState.processNextMidiBuffer (midi, 0, n, true);   // pads and on-screen keys join the incoming MIDI
     handleMidi (midi, filtered);
 
+    // pick up modulation changes from the screen
+    if (modsChanged.load() && modSwap.tryEnter())
+    {
+        activeMods = pendingMods;
+        numActiveMods = numPendingMods;
+        modsChanged = false;
+        modSwap.exit();
+    }
+    updateModSources (0);   // where the waves are at the start of this block
+
     // per-layer settings that don't change within the block
     bool on[numLayers];
     for (int i = 0; i < numLayers; ++i)
@@ -267,10 +284,10 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         l.wasOn = on[i];
         s.instrument = l.current.get();
         s.articulation = l.articulation.load();
-        s.attackSec  = P.atk[i]->load() / 1000.0f;
-        s.decaySec   = P.dec[i]->load() / 1000.0f;
-        s.sustain    = P.sus[i]->load();
-        s.releaseSec = P.rel[i]->load();
+        s.attackSec  = mod (P.atk[i]) / 1000.0f;
+        s.decaySec   = mod (P.dec[i]) / 1000.0f;
+        s.sustain    = mod (P.sus[i]);
+        s.releaseSec = mod (P.rel[i]);
         s.letRing    = P.ring[i]->load() > 0.5f;
 
         // this layer only hears notes inside its key zone (note-offs always pass, so nothing hangs)
@@ -283,16 +300,12 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
                 continue;
             l.midi.addEvent (m, meta.samplePosition);
         }
-        s.velSens    = P.velSens->load();
-        s.bendRange  = P.bend->load();
+        s.velSens    = mod (P.velSens);
+        s.bendRange  = mod (P.bend);
         if (l.buffer.getNumSamples() < n) l.buffer.setSize (2, n, false, false, true);
         l.buffer.clear (0, n);
     }
 
-    const float baseTune = P.tune->load() + P.fine->load() / 100.0f;
-    const float depth = juce::jlimit (0.0f, 1.0f, P.lfoDepth->load() + modWheel);   // the mod wheel adds motion
-    const int target = (int) P.lfoTarget->load();
-    const float lfoInc = juce::MathConstants<float>::twoPi * P.lfoRate->load() / (float) sr;
     const bool stereo = buffer.getNumChannels() > 1;
     auto* L = buffer.getWritePointer (0);
     auto* R = stereo ? buffer.getWritePointer (1) : nullptr;
@@ -302,16 +315,14 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     for (int start = 0; start < n; start += chunk)
     {
         const int len = juce::jmin (chunk, n - start);
-        const float lfo = std::sin (lfoPhase) * depth;   // -depth .. +depth
-        const float lfoCos = std::cos (lfoPhase) * depth;
-        lfoPhase = std::fmod (lfoPhase + lfoInc * (float) len, juce::MathConstants<float>::twoPi);
+        updateModSources (len);   // move the waves on, so modulation follows them through the block
+        const float baseTune = mod (P.tune) + mod (P.fine) / 100.0f;
 
         // morph pad: equal-power blend of the four corners
         float morphGain[numLayers] = { 1.0f, 1.0f, 1.0f, 1.0f };
         if (morphOn)
         {
-            float x = P.morphX->load(), y = P.morphY->load();
-            if (target == 4) { x += 0.45f * lfoCos; y += 0.45f * lfo; }   // the Motion LFO circles the dot
+            float x = mod (P.morphX), y = mod (P.morphY);
             x = juce::jlimit (0.0f, 1.0f, x); y = juce::jlimit (0.0f, 1.0f, y);
             morphXNow = x; morphYNow = y;
             const float w[numLayers] = { (1 - x) * y, x * y, (1 - x) * (1 - y), x * (1 - y) };   // y = 1 is the top
@@ -319,20 +330,19 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         }
         else
         {
-            morphXNow = P.morphX->load(); morphYNow = P.morphY->load();
+            morphXNow = mod (P.morphX); morphYNow = mod (P.morphY);
         }
 
         for (int i = 0; i < numLayers; ++i)
         {
             auto& l = layers[(size_t) i];
-            l.settings.tuneSemis = baseTune + P.tun[i]->load() + (target == 0 ? lfo * 0.5f : 0.0f);   // up to +/- 50 cents
+            l.settings.tuneSemis = baseTune + mod (P.tun[i]);
             if (on[i])
                 l.synth.renderNextBlock (l.buffer, l.midi, start, len);
 
             // layer level and pan (constant power), LFO pan / volume on top
-            float pan = juce::jlimit (-1.0f, 1.0f, P.pan[i]->load() + (target == 3 ? lfo : 0.0f));
-            float g = juce::Decibels::decibelsToGain (P.vol[i]->load()) * morphGain[i]
-                      * (target == 1 ? 1.0f - 0.5f * depth + 0.5f * lfo : 1.0f);
+            float pan = juce::jlimit (-1.0f, 1.0f, mod (P.pan[i]));
+            float g = juce::Decibels::decibelsToGain (mod (P.vol[i])) * morphGain[i];
             float a = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
             float gl = g * std::cos (a) * juce::MathConstants<float>::sqrt2, gr = g * std::sin (a) * juce::MathConstants<float>::sqrt2;
             if (std::abs (pan) < 1.0e-4f) gl = gr = g;   // centred = untouched
@@ -350,7 +360,7 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         }
 
         // tone (with optional LFO sweep)
-        float t = juce::jlimit (-1.0f, 1.0f, P.tone->load() + (target == 2 ? lfo * 0.8f : 0.0f));
+        float t = juce::jlimit (-1.0f, 1.0f, mod (P.tone));
         if (std::abs (t - lastTone) > 0.002f) { toneL.set (t, sr); toneR.set (t, sr); lastTone = t; }
         for (int k = start; k < start + len; ++k)
         {
@@ -360,13 +370,13 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     }
 
     // effects rack: EQ -> chorus -> echo, then width and reverb below
-    eq.process (L, R, n, P.eqLow->load(), P.eqMid->load(), P.eqHigh->load());
-    chorus.process (L, R, n, P.chorusMix->load(), P.chorusDepth->load(), P.chorusRate->load());
-    echo.process (L, R, n, P.delayTime->load(), P.delayFb->load(), P.delayMix->load());
+    eq.process (L, R, n, mod (P.eqLow), mod (P.eqMid), mod (P.eqHigh));
+    chorus.process (L, R, n, mod (P.chorusMix), mod (P.chorusDepth), mod (P.chorusRate));
+    echo.process (L, R, n, mod (P.delayTime), mod (P.delayFb), mod (P.delayMix));
 
     if (R != nullptr)   // stereo width
     {
-        const float width = P.width->load();
+        const float width = mod (P.width);
         if (std::abs (width - 1.0f) > 1.0e-4f)
             for (int i = 0; i < n; ++i)
             {
@@ -376,8 +386,8 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
     }
 
     juce::Reverb::Parameters rp;
-    const float mix = P.revMix->load();
-    rp.roomSize = 0.5f + 0.49f * P.revSize->load();
+    const float mix = mod (P.revMix);
+    rp.roomSize = 0.5f + 0.49f * mod (P.revSize);
     rp.damping  = 0.35f;
     rp.wetLevel = mix * 0.5f;                          // (JUCE's reverb doubles the dry level internally,
     rp.dryLevel = 0.5f * (1.0f - mix * 0.45f);         //  so 0.5 = untouched)
@@ -391,7 +401,7 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
     // master volume, then a safety limiter just under full scale. Below the ceiling it does
     // nothing; it only catches big stacks of bowls ringing together.
-    const float master = juce::Decibels::decibelsToGain (P.volume->load());
+    const float master = juce::Decibels::decibelsToGain (mod (P.volume));
     const float ceiling = 0.944f;   // -0.5 dB
     const float limRelease = std::exp (-1.0f / (0.25f * (float) sr));
     float peak = 0.0f;
@@ -549,6 +559,155 @@ void SolIntentProcessor::timerCallback()
     applyMacros();
     if (midiMapChanged.exchange (false))
         saveDefaultMidiMap();
+}
+
+// ------------------------------------------------------------------------------ modulation
+juce::String SolIntentProcessor::modSourceName (int s)
+{
+    static const char* names[] = { "Motion 1", "Motion 2", "Mod wheel", "Aftertouch" };
+    return names[juce::jlimit (0, (int) numModSources - 1, s)];
+}
+
+bool SolIntentProcessor::canModulate (const juce::AudioProcessorParameter* p)
+{
+    auto* r = dynamic_cast<const juce::RangedAudioParameter*> (p);
+    if (r == nullptr || dynamic_cast<const juce::AudioParameterBool*> (p) != nullptr || dynamic_cast<const juce::AudioParameterChoice*> (p) != nullptr)
+        return false;
+    auto id = r->getParameterID();
+    return ! id.startsWith ("macro") && ! id.endsWith ("KeyLo") && ! id.endsWith ("KeyHi");
+}
+
+void SolIntentProcessor::setModulation (int source, const juce::String& id, float depth)
+{
+    {
+        std::lock_guard<std::mutex> g (modMutex);
+        modLinks.erase (std::remove_if (modLinks.begin(), modLinks.end(),
+                                        [&] (auto& l) { return l.source == source && l.paramID == id && ! l.quarter; }), modLinks.end());
+        if (std::abs (depth) > 0.0001f && canModulate (params.getParameter (id)))
+            modLinks.push_back ({ source, id, juce::jlimit (-1.0f, 1.0f, depth), false });
+    }
+    publishMods();
+}
+
+std::vector<SolIntentProcessor::ModLink> SolIntentProcessor::getModulations (const juce::String& id) const
+{
+    std::lock_guard<std::mutex> g (modMutex);
+    std::vector<ModLink> out;
+    for (auto& l : modLinks) if (id.isEmpty() || l.paramID == id) out.push_back (l);
+    return out;
+}
+
+void SolIntentProcessor::clearModulations (const juce::String& id)
+{
+    {
+        std::lock_guard<std::mutex> g (modMutex);
+        modLinks.erase (std::remove_if (modLinks.begin(), modLinks.end(), [&] (auto& l) { return l.paramID == id; }), modLinks.end());
+    }
+    publishMods();
+}
+
+// Motion 1 moves the dot left/right and, a quarter-turn later, up/down - so it circles.
+void SolIntentProcessor::setOrbit (bool on)
+{
+    {
+        std::lock_guard<std::mutex> g (modMutex);
+        modLinks.erase (std::remove_if (modLinks.begin(), modLinks.end(), [] (auto& l)
+                                        { return l.source == motion1 && (l.paramID == "morphX" || l.paramID == "morphY"); }), modLinks.end());
+        if (on)
+        {
+            modLinks.push_back ({ motion1, "morphX", 0.45f, true });
+            modLinks.push_back ({ motion1, "morphY", 0.45f, false });
+        }
+    }
+    publishMods();
+}
+
+bool SolIntentProcessor::isOrbiting() const
+{
+    std::lock_guard<std::mutex> g (modMutex);
+    for (auto& l : modLinks) if (l.source == motion1 && l.paramID == "morphX" && l.quarter) return true;
+    return false;
+}
+
+void SolIntentProcessor::publishMods()
+{
+    std::array<ActiveMod, maxMods> fresh {};
+    int count = 0;
+    {
+        std::lock_guard<std::mutex> g (modMutex);
+        for (auto& l : modLinks)
+        {
+            auto* prm = dynamic_cast<juce::RangedAudioParameter*> (params.getParameter (l.paramID));
+            if (prm == nullptr || count >= maxMods) continue;
+            fresh[(size_t) count++] = { l.source, prm, params.getRawParameterValue (l.paramID), l.depth, l.quarter };
+        }
+    }
+    const juce::SpinLock::ScopedLockType sl (modSwap);
+    pendingMods = fresh;
+    numPendingMods = count;
+    modsChanged = true;
+}
+
+void SolIntentProcessor::updateModSources (int numSamples)
+{
+    // the Amount knobs can themselves be modulated (e.g. mod wheel brings Motion 1 in)
+    const float amt1 = mod (P.lfoDepth), amt2 = mod (P.lfoDepth2);
+    if (numSamples > 0)
+    {
+        const float twoPi = juce::MathConstants<float>::twoPi;
+        lfoPhase  = std::fmod (lfoPhase  + twoPi * mod (P.lfoRate)  * (float) numSamples / (float) rate, twoPi);
+        lfoPhase2 = std::fmod (lfoPhase2 + twoPi * mod (P.lfoRate2) * (float) numSamples / (float) rate, twoPi);
+    }
+    srcVal[motion1] = std::sin (lfoPhase) * amt1;
+    srcVal[motion2] = std::sin (lfoPhase2) * amt2;
+    srcQuarter[0] = std::cos (lfoPhase) * amt1;
+    srcQuarter[1] = std::cos (lfoPhase2) * amt2;
+    srcVal[modWheelSource] = modWheel;
+    srcVal[aftertouchSource] = aftertouch;
+}
+
+float SolIntentProcessor::mod (std::atomic<float>* raw) const
+{
+    const float base = raw->load();
+    const juce::RangedAudioParameter* prm = nullptr;
+    float offset = 0.0f;
+    for (int i = 0; i < numActiveMods; ++i)
+    {
+        const auto& m = activeMods[(size_t) i];
+        if (m.raw != raw) continue;
+        prm = m.prm;
+        const float v = (m.quarter && m.source <= motion2) ? srcQuarter[m.source] : srcVal[m.source];
+        offset += m.depth * v;
+    }
+    if (prm == nullptr) return base;
+    const auto& range = prm->getNormalisableRange();
+    const float norm = juce::jlimit (0.0f, 1.0f, range.convertTo0to1 (base) + offset);
+    return range.convertFrom0to1 (norm);
+}
+
+juce::ValueTree SolIntentProcessor::modsTree() const
+{
+    juce::ValueTree t ("Mods");
+    std::lock_guard<std::mutex> g (modMutex);
+    for (auto& l : modLinks)
+        t.appendChild (juce::ValueTree ("Mod", { { "source", l.source }, { "param", l.paramID }, { "depth", l.depth }, { "quarter", l.quarter } }), nullptr);
+    return t;
+}
+
+void SolIntentProcessor::applyModsTree (const juce::ValueTree& state)
+{
+    {
+        std::lock_guard<std::mutex> g (modMutex);
+        modLinks.clear();
+        for (auto c : state.getChildWithName ("Mods"))
+        {
+            int src = c["source"];
+            auto id = c["param"].toString();
+            if (src >= 0 && src < numModSources && canModulate (params.getParameter (id)))
+                modLinks.push_back ({ src, id, (float) c["depth"], (bool) c["quarter"] });
+        }
+    }
+    publishMods();
 }
 
 // ------------------------------------------------------------------------------ macros
@@ -729,6 +888,8 @@ juce::ValueTree SolIntentProcessor::makeState()
     }
     state.removeChild (state.getChildWithName ("Macros"), nullptr);
     state.appendChild (macros, nullptr);
+    state.removeChild (state.getChildWithName ("Mods"), nullptr);
+    state.appendChild (modsTree(), nullptr);
     state.setProperty ("padBase", padBaseNote, nullptr);
     state.setProperty ("preset", currentPresetName, nullptr);
     return state;
@@ -758,6 +919,7 @@ void SolIntentProcessor::applyState (const juce::ValueTree& state)
             }
         }
     }
+    applyModsTree (state);
     for (auto& v : lastMacro) v = -1.0f;   // linked knobs follow the macros again
     for (int m = 0; m < numMacros; ++m) lastMacro[(size_t) m] = params.getParameter ("macro" + juce::String (m + 1))->getValue();
 
@@ -870,6 +1032,7 @@ bool SolIntentProcessor::loadPreset (const juce::File& f, bool withInstruments)
             }
         }
         for (int m = 0; m < numMacros; ++m) lastMacro[(size_t) m] = params.getParameter ("macro" + juce::String (m + 1))->getValue();
+        applyModsTree (state);
         return true;
     }
 

@@ -98,10 +98,11 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     // 6-9 macros, 10-14 overall sound
     const Def defs[] = {
         { "aAtk", "Attack", false }, { "aDec", "Decay", false }, { "aSus", "Sustain", false }, { "aRel", "Release", false },
-        { "lfoRate", "Rate", false }, { "lfoDepth", "Depth", false },
+        { "lfoRate", "Rate 1", false }, { "lfoDepth", "Amount 1", false },
         { "macro1", "Macro 1", false }, { "macro2", "Macro 2", false }, { "macro3", "Macro 3", false }, { "macro4", "Macro 4", false },
         { "volume", "Volume", false }, { "tune", "Tune", true }, { "fine", "Fine", true }, { "velSens", "Touch", false },
-        { "bendRange", "Bend", false } };
+        { "bendRange", "Bend", false },
+        { "lfoRate2", "Rate 2", false }, { "lfoDepth2", "Amount 2", false } };   // 15-16 Motion 2
     for (auto& d : defs)
         addAndMakeVisible (knobs.add (new ParamKnob (proc, d.id, d.label, d.bipolar)));
 
@@ -138,11 +139,8 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
         l.setColour (Label::textColourId, ui::goldDim.brighter (0.4f));
         addAndMakeVisible (l);
     };
-    setupCombo (lfoTarget, lfoTargetL, "lfoTarget", "MOVES");
     setupCombo (keyswitch, keyswitchL, "keyswitch", "KEYSWITCH");
-    lfoTarget.setTooltip ("What the slow movement changes. The mod wheel adds more of it.");
     keyswitch.setTooltip ("Where the articulation keys start (violet on the keyboard). Only active when an instrument has more than one articulation.");
-    lfoTargetAtt = std::make_unique<AudioProcessorValueTreeState::ComboBoxAttachment> (proc.params, "lfoTarget", lfoTarget);
     keyswitchAtt = std::make_unique<AudioProcessorValueTreeState::ComboBoxAttachment> (proc.params, "keyswitch", keyswitch);
 
     refreshList();
@@ -229,7 +227,7 @@ void SolIntentEditor::paint (Graphics& g)
     };
     heading (browserArea.reduced (14, 0).withHeight (30), "INSTRUMENTS");
     heading (sectionEnv, "LAYER " + SolIntentProcessor::layerLetter (proc.activeLayer));
-    heading (sectionMotion, "MOTION");
+    heading (sectionMotion, "MOTION  (right-click a knob > Modulate with)");
     heading (sectionMacros, "MACROS");
     heading (sectionSound, "OVERALL");
 }
@@ -317,9 +315,8 @@ void SolIntentEditor::resized()
     row = k.removeFromTop (kh);
     place (4, row.removeFromLeft (cw));
     place (5, row.removeFromLeft (cw));
-    auto comboCell = row.removeFromLeft (cw * 2).reduced (6, 0);
-    lfoTargetL.setBounds (comboCell.removeFromTop (14));
-    lfoTarget.setBounds (comboCell.withSizeKeepingCentre (comboCell.getWidth(), 28).translated (0, -8));
+    place (15, row.removeFromLeft (cw));
+    place (16, row.removeFromLeft (cw));
     k.removeFromTop (4);
 
     sectionMacros = k.removeFromTop (22);

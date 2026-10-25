@@ -304,14 +304,14 @@ private:
 
     juce::OwnedArray<ParamKnob> knobs;
     juce::ToggleButton letRing { "Let ring" };
-    juce::ComboBox lfoTarget, keyswitch;
-    juce::Label lfoTargetL, keyswitchL, zoneL;
+    juce::ComboBox keyswitch;
+    juce::Label keyswitchL, zoneL;
     juce::Slider zoneLo, zoneHi;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> letRingAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> zoneLoAtt, zoneHiAtt;
     int controlsLayer = -1;
     void pointLayerControlsAt (int layer);
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lfoTargetAtt, keyswitchAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> keyswitchAtt;
 
     sol::InstrumentPtr shown[SolIntentProcessor::numLayers];
     int shownArt = -1, shownLayer = -1, shownKs = -2;

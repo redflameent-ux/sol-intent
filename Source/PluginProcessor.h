@@ -86,7 +86,18 @@ public:
     void setMacroName (int macro, const juce::String&);
     void applyMacros (bool force = false);                               // pushes macro positions to linked knobs
 
-    // ---- morph pad: where the blend actually is right now (includes the Motion orbit)
+    // ---- modulation: any knob can be moved by Motion 1, Motion 2 (slow waves), the mod wheel or aftertouch
+    enum ModSource { motion1 = 0, motion2, modWheelSource, aftertouchSource, numModSources };
+    static juce::String modSourceName (int s);
+    struct ModLink { int source = 0; juce::String paramID; float depth = 0.25f; bool quarter = false; };   // depth: -1..1 of the knob's range
+    void setModulation (int source, const juce::String& paramID, float depth);   // depth 0 removes it
+    std::vector<ModLink> getModulations (const juce::String& paramID = {}) const; // empty id = all of them
+    void clearModulations (const juce::String& paramID);
+    void setOrbit (bool on);                                                      // Motion 1 circles the morph dot
+    bool isOrbiting() const;
+    static bool canModulate (const juce::AudioProcessorParameter*);
+
+    // ---- morph pad: where the blend actually is right now (includes any modulation)
     std::atomic<float> morphXNow { 0.5f }, morphYNow { 0.5f };
 
     // ---- MIDI learn
@@ -132,7 +143,7 @@ private:
     struct ParamPtrs
     {
         std::atomic<float> *volume, *tune, *fine, *velSens, *bend,
-                           *tone, *width, *revMix, *revSize, *lfoRate, *lfoDepth, *lfoTarget, *keyswitch,
+                           *tone, *width, *revMix, *revSize, *lfoRate, *lfoDepth, *lfoRate2, *lfoDepth2, *keyswitch,
                            *eqLow, *eqMid, *eqHigh, *chorusMix, *chorusDepth, *chorusRate, *delayTime, *delayFb, *delayMix,
                            *morphOn, *morphX, *morphY;
         std::atomic<float> *on[numLayers], *vol[numLayers], *tun[numLayers], *pan[numLayers],
@@ -156,7 +167,24 @@ private:
     std::vector<juce::RangedAudioParameter*> learnable;
     std::array<std::atomic<int>, 128> ccToParam {};
     std::atomic<int> learningIndex { -1 };
-    float modWheel = 0.0f;
+    float modWheel = 0.0f, aftertouch = 0.0f;
+
+    // modulation: edited on the message thread, copied to the audio thread when it changes
+    struct ActiveMod { int source; juce::RangedAudioParameter* prm; std::atomic<float>* raw; float depth; bool quarter; };
+    static constexpr int maxMods = 64;
+    mutable std::mutex modMutex;
+    std::vector<ModLink> modLinks;
+    juce::SpinLock modSwap;
+    std::array<ActiveMod, maxMods> pendingMods, activeMods;
+    int numPendingMods = 0, numActiveMods = 0;
+    std::atomic<bool> modsChanged { false };
+    float srcVal[numModSources] {}, srcQuarter[2] {};
+    float lfoPhase2 = 0.0f;
+    void publishMods();
+    void updateModSources (int numSamples);
+    float mod (std::atomic<float>* raw) const;   // a knob's value with modulation added
+    juce::ValueTree modsTree() const;
+    void applyModsTree (const juce::ValueTree& state);
     std::atomic<bool> midiMapChanged { false };
     void saveDefaultMidiMap();
     void loadDefaultMidiMap();

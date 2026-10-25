@@ -43,6 +43,9 @@ static int snapshot (const File& png)
     sol::Library::setLibraryFolder (File::getSpecialLocation (File::tempDirectory).getChildFile ("sol_test_lib"));
     SolIntentProcessor p;
     p.prepareToPlay (48000.0, 512);
+    p.setModulation (SolIntentProcessor::motion1, "eqHigh", 0.3f);        // show what assigned modulation looks like
+    p.setModulation (SolIntentProcessor::modWheelSource, "reverbMix", 0.5f);
+    p.setModulation (SolIntentProcessor::motion2, "aPan", -0.5f);
     std::unique_ptr<AudioProcessorEditor> ed (p.createEditor());
     for (int i = 0; i < 200 && p.isLoading(); ++i) Thread::sleep (10);
     AudioBuffer<float> out (2, 512);
@@ -515,10 +518,15 @@ int main (int argc, char** argv)
         for (int i = 1000; i < bs * 20; ++i) if (capture.getSample (0, i - 1) < 0.0f && capture.getSample (0, i) >= 0.0f) ++zc;
         hz = zc / ((bs * 20 - 1000) / sr);
         CHECK (std::abs (hz - 500.0) < 25.0, "moving the dot to B's corner fades over to layer B while it rings (" + String (hz, 0) + " Hz)");
-        setP ("lfoTarget", 4); setP ("lfoDepth", 0.8f); setP ("lfoRate", 2.0f);
-        render (p, out, m, 40, bs);
-        CHECK (std::abs (p.morphXNow.load() - 1.0f) > 0.01f || std::abs (p.morphYNow.load() - 1.0f) > 0.01f, "Morph orbit moves the dot on its own");
-        setP ("lfoDepth", 0); setP ("morphOn", 0);
+        p.setOrbit (true); setP ("lfoDepth", 0.8f); setP ("lfoRate", 2.0f);
+        float minX = 1, minY = 1;
+        for (int b = 0; b < 40; ++b)
+        {
+            p.processBlock (out, m); m.clear();
+            minX = jmin (minX, p.morphXNow.load()); minY = jmin (minY, p.morphYNow.load());
+        }
+        CHECK (minX < 0.8f && minY < 0.8f, "Orbit with Motion 1 moves the dot on its own, both ways");
+        p.setOrbit (false); setP ("lfoDepth", 1); setP ("morphOn", 0);
         p.stopAllSound(); render (p, out, m, 2, bs);
 
         // effects rack
@@ -589,6 +597,76 @@ int main (int argc, char** argv)
         sol::Library::writeSpec (info.folder, before);
         auto undone = sol::Library::describe (info);
         CHECK (undone.articulations[0].zones[0].root == before.articulations[0].zones[0].root, "writing the earlier mapping back restores it (undo)");
+    }
+
+    std::cout << "Assignable modulation (Motion 1/2, mod wheel, aftertouch)\n";
+    {
+        auto setP = [&p] (const char* id, float plain)
+        {
+            p.params.getParameter (id)->setValueNotifyingHost (p.params.getParameterRange (id).convertTo0to1 (plain));
+        };
+        p.stopAllSound(); render (p, out, m, 2, bs);
+        CHECK (p.getModulations().empty(), "nothing is modulated until you assign it");
+        CHECK (! SolIntentProcessor::canModulate (p.params.getParameter ("aOn")) && ! SolIntentProcessor::canModulate (p.params.getParameter ("macro1"))
+               && SolIntentProcessor::canModulate (p.params.getParameter ("tone")), "switches and macros can't be modulated; knobs can");
+
+        // Motion 1 swinging layer A's pan: left and right channels trade places over time
+        p.rescanLibrary();
+        p.loadNow (0, p.getInstrumentList()[(size_t) jmax (0, p.findInList (root.getChildFile ("Test Bowls")))]);
+        for (auto id : { "bOn", "cOn", "dOn" }) setP (id, 0);
+        setP ("aOn", 1); setP ("reverbMix", 0); setP ("lfoRate", 4.0f); setP ("lfoDepth", 1.0f);
+        p.setModulation (SolIntentProcessor::motion1, "aPan", 1.0f);
+        CHECK (p.getModulations ("aPan").size() == 1, "Motion 1 assigned to A Pan");
+        render (p, out, m, 2, bs);
+        m.addEvent (MidiMessage::noteOn (1, 60, (uint8) 110), 0);
+        float minRatio = 99, maxRatio = 0;
+        for (int b = 0; b < 60; ++b)
+        {
+            p.processBlock (out, m); m.clear();
+            float l = out.getRMSLevel (0, 0, bs), r = out.getRMSLevel (1, 0, bs);
+            if (l > 1e-4f && r > 1e-4f) { minRatio = jmin (minRatio, l / r); maxRatio = jmax (maxRatio, l / r); }
+        }
+        CHECK (minRatio < 0.5f && maxRatio > 2.0f, "Motion 1 swings the sound left and right (L/R " + String (minRatio, 2) + " to " + String (maxRatio, 2) + ")");
+        p.setModulation (SolIntentProcessor::motion1, "aPan", 0.0f);
+        CHECK (p.getModulations ("aPan").empty(), "setting it to Off removes it");
+        p.stopAllSound(); render (p, out, m, 2, bs);
+
+        // mod wheel opening up the echo
+        p.setModulation (SolIntentProcessor::modWheelSource, "delayMix", 1.0f);
+        m.addEvent (MidiMessage::controllerEvent (1, 1, 0), 0);
+        m.addEvent (MidiMessage::noteOn (1, 60, (uint8) 110), 0);
+        render (p, out, m, 2, bs);
+        m.addEvent (MidiMessage::allNotesOff (1), 0);
+        p.stopAllSound(); render (p, out, m, 1, bs);
+        m.addEvent (MidiMessage::noteOn (1, 60, (uint8) 110), 0);
+        m.addEvent (MidiMessage::controllerEvent (1, 1, 0), 0);
+        render (p, out, m, 3, bs);
+        p.stopAllSound();
+        auto tailPeak = [&] { float pk = 0; for (int b = 0; b < 30; ++b) { p.processBlock (out, m); m.clear(); pk = jmax (pk, out.getMagnitude (0, bs)); } return pk; };
+        render (p, out, m, 1, bs);
+        const float tailDry = tailPeak();
+        m.addEvent (MidiMessage::controllerEvent (1, 1, 127), 0);
+        m.addEvent (MidiMessage::noteOn (1, 60, (uint8) 110), 0);
+        render (p, out, m, 3, bs);
+        p.stopAllSound();
+        render (p, out, m, 1, bs);
+        const float tailWet = tailPeak();
+        CHECK (tailWet > tailDry + 0.001f, "mod wheel up brings in the echo it's assigned to (" + String (tailDry, 4) + " -> " + String (tailWet, 4) + ")");
+        CHECK (p.params.getRawParameterValue ("delayMix")->load() < 0.001f, "the knob itself stays where you left it - modulation sits on top");
+
+        // aftertouch and Motion 2 can be assigned too, and everything saves with the project
+        p.setModulation (SolIntentProcessor::aftertouchSource, "tone", 0.5f);
+        p.setModulation (SolIntentProcessor::motion2, "bVol", -0.25f);
+        MemoryBlock st; p.getStateInformation (st);
+        SolIntentProcessor q; q.setStateInformation (st.getData(), (int) st.getSize());
+        for (int i = 0; i < 200 && q.isLoading(); ++i) Thread::sleep (10);
+        auto qm = q.getModulations();
+        CHECK (qm.size() == 3, "all three modulations reopen with the project (" + String ((int) qm.size()) + ")");
+        bool hasNeg = false; for (auto& l : qm) if (l.paramID == "bVol" && l.depth < 0) hasNeg = true;
+        CHECK (hasNeg, "negative amounts (moving a knob down) are kept");
+        for (auto id : { "delayMix", "tone", "bVol" }) p.clearModulations (id);
+        m.addEvent (MidiMessage::controllerEvent (1, 1, 0), 0);
+        p.stopAllSound(); render (p, out, m, 2, bs);
     }
 
     std::cout << (failures == 0 ? "\nALL PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");

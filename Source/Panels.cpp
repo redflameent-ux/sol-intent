@@ -8,7 +8,7 @@ MorphPad::MorphPad (SolIntentProcessor& p) : proc (p)
 {
     onButton.setButtonText ("Morph");
     onButton.setTooltip ("On: the dot blends the four layers - A top-left, B top-right, C bottom-left, D bottom-right.\n"
-                         "Set Motion to \"Morph orbit\" to let it drift on its own.");
+                         "Right-click the pad to let Motion 1 circle the dot on its own.");
     onAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (proc.params, "morphOn", onButton);
     addAndMakeVisible (onButton);
 }
@@ -115,8 +115,18 @@ void MorphPad::mouseDown (const MouseEvent& e)
         m.addItem (1, "Learn MIDI control for left / right");
         m.addItem (2, "Learn MIDI control for up / down");
         m.addItem (3, "Back to the middle");
+        m.addSeparator();
+        m.addItem (4, "Orbit with Motion 1 (the dot circles on its own)", true, proc.isOrbiting());
         m.showMenuAsync (PopupMenu::Options(), [this] (int r)
         {
+            if (r == 4)
+            {
+                const bool on = ! proc.isOrbiting();
+                proc.setOrbit (on);
+                if (on) onButton.setToggleState (true, sendNotificationSync);
+                proc.setStatus (on ? "The dot now circles with Motion 1 - Rate 1 sets the speed, Amount 1 the size."
+                                   : "Orbit off.");
+            }
             if (r == 1) proc.startLearning ("morphX");
             if (r == 2) proc.startLearning ("morphY");
             if (r == 3) { proc.params.getParameter ("morphX")->setValueNotifyingHost (0.5f); proc.params.getParameter ("morphY")->setValueNotifyingHost (0.5f); }

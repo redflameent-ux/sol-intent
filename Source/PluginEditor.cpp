@@ -87,6 +87,17 @@ void ui::Look::drawRotarySlider (Graphics& g, int x, int y, int w, int h, float 
     g.setColour (arcCol);
     g.strokePath (val, PathStrokeType (stroke, PathStrokeType::curved, PathStrokeType::rounded));
 
+    // modulation range: a thin outer arc showing how far the modulation can push the knob
+    const float modDepth = s.getProperties()["modDepth"];
+    if (std::abs (modDepth) > 0.0001f)
+    {
+        const float a1 = to, a2 = jlimit (start, end, to + modDepth * (end - start));
+        Path modArc;
+        modArc.addCentredArc (c.x, c.y, r - 0.5f, r - 0.5f, 0.0f, jmin (a1, a2), jmax (a1, a2), true);
+        g.setColour (gold.withAlpha (0.9f));
+        g.strokePath (modArc, PathStrokeType (1.6f, PathStrokeType::curved, PathStrokeType::rounded));
+    }
+
     auto tip = c.getPointOnCircumference (r * 0.52f, to);
     g.setColour (text);
     g.fillEllipse (Rectangle<float> (4.5f, 4.5f).withCentre (tip));
@@ -209,7 +220,36 @@ void ParamKnob::showMenu()
         m.addSubMenu ("Linked knobs (" + String ((int) links.size()) + ")", linked);
         m.addItem (21, "Unlink everything", ! links.empty());
     }
-    else
+    if (SolIntentProcessor::canModulate (proc.params.getParameter (paramID)))
+    {
+        // modulation: any source can move this knob, by as much as you like, either way
+        m.addSeparator();
+        auto mods = proc.getModulations (paramID);
+        PopupMenu modMenu;
+        static const float amounts[] = { 1.0f, 0.5f, 0.25f, 0.1f, -0.1f, -0.25f, -0.5f, -1.0f };
+        for (int src = 0; src < SolIntentProcessor::numModSources; ++src)
+        {
+            float current = 0.0f;
+            for (auto& l : mods) if (l.source == src && ! l.quarter) current = l.depth;
+            PopupMenu amountMenu;
+            for (int a = 0; a < 8; ++a)
+                amountMenu.addItem (100 + src * 10 + a, (amounts[a] > 0 ? "+" : "") + String (roundToInt (amounts[a] * 100)) + "% of the knob's range",
+                                    true, std::abs (current - amounts[a]) < 0.001f);
+            amountMenu.addSeparator();
+            amountMenu.addItem (100 + src * 10 + 9, "Off", current != 0.0f);
+            modMenu.addSubMenu (SolIntentProcessor::modSourceName (src)
+                                    + (current != 0.0f ? "   (" + String (current > 0 ? "+" : "") + String (roundToInt (current * 100)) + "%)" : String()),
+                                amountMenu, true, nullptr, current != 0.0f);
+        }
+        if (! mods.empty())
+        {
+            modMenu.addSeparator();
+            modMenu.addItem (190, "Remove all modulation from this knob");
+        }
+        m.addSubMenu ("Modulate with", modMenu, true, nullptr, ! mods.empty());
+    }
+
+    if (! isMacro)
     {
         m.addSeparator();
         const int current = proc.getMacroFor (paramID);
@@ -239,6 +279,17 @@ void ParamKnob::showMenu()
         }
         if (r == 30) { int k = proc.getMacroFor (paramID); proc.setMacroEnd (k, paramID); proc.setStatus ("Set where " + proc.getMacroName (k) + " takes " + baseLabel + "."); }
         if (r == 31) proc.unlinkFromMacro (paramID);
+        if (r >= 100 && r < 100 + SolIntentProcessor::numModSources * 10)
+        {
+            static const float amounts[] = { 1.0f, 0.5f, 0.25f, 0.1f, -0.1f, -0.25f, -0.5f, -1.0f, 0.0f, 0.0f };
+            const int src = (r - 100) / 10, a = (r - 100) % 10;
+            proc.setModulation (src, paramID, amounts[a]);
+            if (a < 8)
+                proc.setStatus (SolIntentProcessor::modSourceName (src) + " now moves " + baseLabel + " by "
+                                + String (roundToInt (amounts[a] * 100)) + "%."
+                                + (src <= SolIntentProcessor::motion2 ? " Set its speed and amount in MOTION." : ""));
+        }
+        if (r == 190) proc.clearModulations (paramID);
         if (r == 21) proc.clearMacro (macroIndex);
         if (r == 20)
         {
@@ -277,10 +328,21 @@ void ParamKnob::refreshLearnState()
     const bool learning = proc.getLearningParam() == paramID;
     const bool isMacro = paramID.startsWith ("macro");
     const int macro = isMacro ? -1 : proc.getMacroFor (paramID);
-    if ((bool) slider.getProperties()["learning"] != learning || (bool) slider.getProperties()["linked"] != (macro >= 0))
+    float modDepth = 0.0f;
+    String modTag;
+    for (auto& l : proc.getModulations (paramID))
+        if (! l.quarter || l.paramID != "morphX")
+        {
+            modDepth += l.depth;
+            if (modTag.isEmpty()) modTag = l.source == SolIntentProcessor::motion1 ? "~1" : l.source == SolIntentProcessor::motion2 ? "~2"
+                                         : l.source == SolIntentProcessor::modWheelSource ? "~MW" : "~AT";
+        }
+    if ((bool) slider.getProperties()["learning"] != learning || (bool) slider.getProperties()["linked"] != (macro >= 0)
+        || std::abs ((float) slider.getProperties()["modDepth"] - modDepth) > 0.0001f)
     {
         slider.getProperties().set ("learning", learning);
         slider.getProperties().set ("linked", macro >= 0);
+        slider.getProperties().set ("modDepth", modDepth);
         slider.repaint();
     }
     int cc = proc.getLearnedCC (paramID);
@@ -292,6 +354,7 @@ void ParamKnob::refreshLearnState()
     {
         if (macro >= 0) t << "  M" << (macro + 1);
         else if (cc >= 0) t << "  CC" << cc;
+        if (modTag.isNotEmpty()) t << "  " << modTag;
     }
     if (t != shownLabel)
     {
