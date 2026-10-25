@@ -28,8 +28,13 @@ MapView::MapView (SolIntentProcessor& p) : proc (p)
         if (idx >= 0) { art = idx; selected = currentArt() != nullptr && ! currentArt()->zones.empty() ? 0 : -1; proc.setArticulation (proc.activeLayer, art); refreshControls(); }
     };
 
-    for (auto* b : { &addArt, &renameArt, &deleteArt, &importButton, &setRoot, &playZone, &autoRanges, &removeZone })
+    for (auto* b : { &addArt, &renameArt, &deleteArt, &importButton, &setRoot, &playZone, &autoRanges, &removeZone, &undoButton, &redoButton })
         addAndMakeVisible (b);
+    undoButton.setTooltip ("Undo the last mapping change (Cmd/Ctrl + Z)");
+    redoButton.setTooltip ("Redo (Shift + Cmd/Ctrl + Z)");
+    undoButton.onClick = [this] { undo(); };
+    redoButton.onClick = [this] { redo(); };
+    setWantsKeyboardFocus (true);
 
     addArt.onClick = [this]
     {
@@ -213,6 +218,9 @@ void MapView::setTarget (const sol::InstrumentInfo& newInfo, int articulation)
     for (auto& a : spec.articulations) sol::Library::fillAutoRanges (a);
     art = articulation;
     selected = (currentArt() != nullptr && ! currentArt()->zones.empty()) ? 0 : -1;
+    undoStack.clear(); redoStack.clear();
+    committed = spec;
+    editBurst = false;
     refreshArticulationBox();
     refreshControls();
 }
@@ -220,14 +228,77 @@ void MapView::setTarget (const sol::InstrumentInfo& newInfo, int articulation)
 void MapView::changed()
 {
     if (! editable) return;
+    if (! editBurst)   // first edit of a burst: remember how things were before it
+    {
+        undoStack.push_back (committed);
+        if (undoStack.size() > 200) undoStack.erase (undoStack.begin());
+        redoStack.clear();
+        editBurst = true;
+    }
+    saveAndReload();
+}
+
+void MapView::saveAndReload()
+{
     sol::Library::writeSpec (info.folder, spec);
-    startTimer (700);   // reload once the edits pause
+    startTimer (700);   // reload the sound once the edits pause
+    refreshUndoButtons();
 }
 
 void MapView::timerCallback()
 {
     stopTimer();
+    if (! dragging)
+    {
+        editBurst = false;
+        committed = spec;
+    }
     proc.reloadLayersUsing (info.folder);
+}
+
+void MapView::undo()
+{
+    if (! editable || undoStack.empty()) return;
+    redoStack.push_back (spec);
+    spec = undoStack.back();
+    undoStack.pop_back();
+    committed = spec;
+    editBurst = false;
+    selected = jmin (selected, currentArt() != nullptr ? (int) currentArt()->zones.size() - 1 : -1);
+    saveAndReload();
+    refreshArticulationBox();
+    refreshControls();
+    proc.setStatus ("Undone.");
+}
+
+void MapView::redo()
+{
+    if (! editable || redoStack.empty()) return;
+    undoStack.push_back (spec);
+    spec = redoStack.back();
+    redoStack.pop_back();
+    committed = spec;
+    editBurst = false;
+    selected = jmin (selected, currentArt() != nullptr ? (int) currentArt()->zones.size() - 1 : -1);
+    saveAndReload();
+    refreshArticulationBox();
+    refreshControls();
+    proc.setStatus ("Redone.");
+}
+
+void MapView::refreshUndoButtons()
+{
+    undoButton.setEnabled (editable && ! undoStack.empty());
+    redoButton.setEnabled (editable && ! redoStack.empty());
+}
+
+bool MapView::keyPressed (const KeyPress& k)
+{
+    const bool cmd = k.getModifiers().isCommandDown();
+    if (cmd && k.getKeyCode() == 'Z' && ! k.getModifiers().isShiftDown()) { undo(); return true; }
+    if ((cmd && k.getKeyCode() == 'Z' && k.getModifiers().isShiftDown()) || (cmd && k.getKeyCode() == 'Y')) { redo(); return true; }
+    if ((k == KeyPress::backspaceKey || k == KeyPress::deleteKey) && removeZone.isEnabled()) { removeZone.onClick(); return true; }
+    return false;
 }
 
 // Asks how the recordings should sit on the keyboard, suggesting the likely answer.
@@ -370,13 +441,14 @@ void MapView::refreshControls()
     const ScopedValueSetter<bool> s (updating, true);
     auto* a = currentArt();
     auto* z = currentZone();
+    refreshUndoButtons();
 
     // view range around the mapped keys
     viewLo = 127; viewHi = 0;
     if (a != nullptr) for (auto& zz : a->zones) { viewLo = jmin (viewLo, zz.lo); viewHi = jmax (viewHi, zz.hi); }
     if (viewLo > viewHi) { viewLo = 48; viewHi = 84; }
-    viewLo = jmax (0, viewLo - 4); viewHi = jmin (127, viewHi + 4);
-    while (viewHi - viewLo < 36) { viewLo = jmax (0, viewLo - 1); viewHi = jmin (127, viewHi + 1); }
+    viewLo = jmax (0, viewLo - 12); viewHi = jmin (127, viewHi + 12);   // room to drag blocks around
+    while (viewHi - viewLo < 48) { viewLo = jmax (0, viewLo - 1); viewHi = jmin (127, viewHi + 1); }
 
     for (auto* c : std::initializer_list<Component*> { &root, &lo, &hi, &velLo, &velHi, &gain, &setRoot, &playZone, &removeZone })
         c->setEnabled (editable && z != nullptr);
@@ -457,25 +529,153 @@ int MapView::keyAtX (float x) const
     return viewLo + (int) std::floor ((x - r.getX()) / r.getWidth() * (float) (viewHi - viewLo + 1));
 }
 
-void MapView::mouseDown (const MouseEvent& e)
+// ---- the map drawing: click to pick a block, drag it to another key, drag its edges to resize
+Rectangle<float> MapView::zoneRect (const sol::ZoneSpec& z) const
 {
-    auto r = mapArea();
+    auto grid = mapArea().toFloat().withTrimmedBottom (14.0f);
+    float x1 = xForKey (z.lo), x2 = xForKey (z.hi + 1);
+    float y1 = grid.getBottom() - grid.getHeight() * (float) (z.velHi + 1) / 128.0f;
+    float y2 = grid.getBottom() - grid.getHeight() * (float) z.velLo / 128.0f;
+    return { x1, y1, x2 - x1, y2 - y1 };
+}
+
+Rectangle<float> MapView::getZoneBounds (int index)
+{
     auto* a = currentArt();
-    if (a == nullptr || ! r.contains (e.getPosition())) return;
-    int key = keyAtX ((float) e.x);
-    int vel = jlimit (0, 127, (int) (127.0f * (float) (r.getBottom() - 14 - e.y) / (float) (r.getHeight() - 14)));
-    // prefer the smallest zone under the mouse
-    int best = -1, bestSize = 1 << 30;
+    if (a == nullptr || index < 0 || index >= (int) a->zones.size()) return {};
+    return zoneRect (a->zones[(size_t) index]);
+}
+
+int MapView::velAtY (float y) const
+{
+    auto grid = mapArea().toFloat().withTrimmedBottom (14.0f);
+    return jlimit (0, 127, (int) (128.0f * (grid.getBottom() - y) / grid.getHeight()));
+}
+
+int MapView::zoneAt (Point<float> p) const
+{
+    auto* a = const_cast<MapView*> (this)->currentArt();
+    if (a == nullptr) return -1;
+    // the selected block wins, then the smallest one under the mouse
+    if (selected >= 0 && selected < (int) a->zones.size() && zoneRect (a->zones[(size_t) selected]).expanded (3.0f).contains (p))
+        return selected;
+    int best = -1;
+    float bestArea = 1.0e9f;
     for (int i = 0; i < (int) a->zones.size(); ++i)
     {
-        auto& z = a->zones[(size_t) i];
-        if (key >= z.lo && key <= z.hi && vel >= z.velLo && vel <= z.velHi)
-        {
-            int size = (z.hi - z.lo + 1) * (z.velHi - z.velLo + 1);
-            if (size < bestSize) { best = i; bestSize = size; }
-        }
+        auto r = zoneRect (a->zones[(size_t) i]);
+        if (r.contains (p) && r.getWidth() * r.getHeight() < bestArea) { best = i; bestArea = r.getWidth() * r.getHeight(); }
     }
-    if (best >= 0) selectZone (best);
+    return best;
+}
+
+MapView::Grab MapView::grabAt (const sol::ZoneSpec& z, Point<float> p) const
+{
+    auto r = zoneRect (z);
+    const float edge = jmin (6.0f, r.getWidth() * 0.3f);
+    if (std::abs (p.x - r.getX()) < edge) return Grab::left;
+    if (std::abs (p.x - r.getRight()) < edge) return Grab::right;
+    if (std::abs (p.y - r.getY()) < 5.0f) return Grab::top;
+    if (std::abs (p.y - r.getBottom()) < 5.0f && r.getBottom() < mapArea().getBottom() - 16) return Grab::bottom;
+    return Grab::move;
+}
+
+void MapView::mouseMove (const MouseEvent& e)
+{
+    auto* a = currentArt();
+    int i = editable ? zoneAt (e.position) : -1;
+    if (a == nullptr || i < 0) { setMouseCursor (MouseCursor::NormalCursor); return; }
+    switch (grabAt (a->zones[(size_t) i], e.position))
+    {
+        case Grab::left: case Grab::right:  setMouseCursor (MouseCursor::LeftRightResizeCursor); break;
+        case Grab::top:  case Grab::bottom: setMouseCursor (MouseCursor::UpDownResizeCursor); break;
+        default:                            setMouseCursor (MouseCursor::DraggingHandCursor); break;
+    }
+}
+
+void MapView::mouseDown (const MouseEvent& e)
+{
+    grabKeyboardFocus();
+    auto* a = currentArt();
+    if (a == nullptr || ! mapArea().contains (e.getPosition())) return;
+    const int i = zoneAt (e.position);
+    if (i < 0) return;
+    if (i != selected) selectZone (i);
+    if (! editable) return;
+    grab = grabAt (a->zones[(size_t) i], e.position);
+    grabStart = a->zones[(size_t) i];
+    grabKey = keyAtX (e.position.x);
+    grabVel = velAtY (e.position.y);
+    dragging = false;
+}
+
+void MapView::mouseDrag (const MouseEvent& e)
+{
+    auto* z = currentZone();
+    if (z == nullptr || grab == Grab::none || ! editable) return;
+    if (! dragging && e.getDistanceFromDragStart() < 3) return;
+    dragging = true;
+
+    const int dk = keyAtX (e.position.x) - grabKey;
+    const int dv = velAtY (e.position.y) - grabVel;
+    auto s = grabStart;
+    switch (grab)
+    {
+        case Grab::move:
+        {
+            // the whole block (and its root) slides to new keys, so it still plays untouched on its root
+            const int shift = jlimit (-s.lo, 127 - s.hi, dk);
+            s.lo += shift; s.hi += shift; s.root = jlimit (0, 127, s.root + shift);
+            if (s.velLo > 0 || s.velHi < 127)   // velocity layers can also slide up and down
+            {
+                const int vshift = jlimit (-s.velLo, 127 - s.velHi, dv);
+                s.velLo += vshift; s.velHi += vshift;
+            }
+            break;
+        }
+        case Grab::left:   s.lo = jlimit (0, s.hi, s.lo + dk); break;
+        case Grab::right:  s.hi = jlimit (s.lo, 127, s.hi + dk); break;
+        case Grab::top:    s.velHi = jlimit (s.velLo, 127, s.velHi + dv); break;
+        case Grab::bottom: s.velLo = jlimit (0, s.velHi, s.velLo + dv); break;
+        case Grab::none: break;
+    }
+    if (s.lo == z->lo && s.hi == z->hi && s.root == z->root && s.velLo == z->velLo && s.velHi == z->velHi) return;
+    *z = s;
+    changed();
+
+    const ScopedValueSetter<bool> u (updating, true);   // keep the number boxes in step
+    root.setValue (z->root, dontSendNotification);
+    lo.setValue (z->lo, dontSendNotification);
+    hi.setValue (z->hi, dontSendNotification);
+    velLo.setValue (z->velLo, dontSendNotification);
+    velHi.setValue (z->velHi, dontSendNotification);
+    zoneList.repaint();
+    repaint();
+}
+
+void MapView::mouseUp (const MouseEvent&)
+{
+    if (dragging)
+    {
+        dragging = false;
+        if (auto* a = currentArt())   // keep the list in key order, and keep the moved block selected
+        {
+            auto moved = a->zones[(size_t) selected];
+            std::stable_sort (a->zones.begin(), a->zones.end(), [] (auto& x, auto& y) { return x.root < y.root; });
+            for (int i = 0; i < (int) a->zones.size(); ++i)
+            {
+                auto& z = a->zones[(size_t) i];
+                if (z.file == moved.file && z.root == moved.root && z.lo == moved.lo && z.velLo == moved.velLo) { selected = i; break; }
+            }
+            saveAndReload();
+        }
+        refreshControls();
+        if (auto* z = currentZone())
+            proc.setStatus (File::createFileWithoutCheckingPath (z->file).getFileName() + " now plays on "
+                            + (z->lo == z->hi ? sol::noteName (z->lo) : sol::noteName (z->lo) + " to " + sol::noteName (z->hi))
+                            + " (root " + sol::noteName (z->root) + "). Undo if that wasn't right.");
+    }
+    grab = Grab::none;
 }
 
 void MapView::paint (Graphics& g)
@@ -520,10 +720,7 @@ void MapView::paint (Graphics& g)
         for (int i = 0; i < (int) a->zones.size(); ++i)
         {
             auto& z = a->zones[(size_t) i];
-            float x1 = xForKey (z.lo), x2 = xForKey (z.hi + 1);
-            float y1 = grid.getBottom() - grid.getHeight() * (float) (z.velHi + 1) / 128.0f;
-            float y2 = grid.getBottom() - grid.getHeight() * (float) z.velLo / 128.0f;
-            auto zr = Rectangle<float> (x1, y1, x2 - x1, y2 - y1).reduced (0.5f);
+            auto zr = zoneRect (z).reduced (0.5f);
             auto col = ui::teal.interpolatedWith (ui::violet, (float) (z.root % 12) / 11.0f);
             g.setColour (col.withAlpha (i == selected ? 0.55f : 0.22f));
             g.fillRect (zr);
@@ -548,7 +745,8 @@ void MapView::paint (Graphics& g)
 
     g.setColour (ui::textDim);
     g.setFont (FontOptions (11.0f));
-    g.drawText (editable ? "Changes save automatically to the instrument folder." : "", getLocalBounds().removeFromBottom (20).reduced (12, 0),
+    g.drawText (editable ? "Drag blocks to move them, drag their edges to resize. Saves automatically." : "",
+                getLocalBounds().removeFromBottom (32).withTrimmedRight (140).reduced (12, 0),
                 Justification::centredLeft);
 }
 
@@ -566,7 +764,11 @@ void MapView::resized()
     importButton.setBounds (top.removeFromRight (110));
 
     r.removeFromTop (8 + 150 + 8);   // the map drawing
-    r.removeFromBottom (20);         // footer note
+    auto footer = r.removeFromBottom (24);
+    redoButton.setBounds (footer.removeFromRight (56).withTrimmedTop (2));
+    footer.removeFromRight (6);
+    undoButton.setBounds (footer.removeFromRight (56).withTrimmedTop (2));
+    r.removeFromBottom (4);
 
     auto buttons = r.removeFromBottom (28);
     const int bw = (buttons.getWidth() - 18) / 4;

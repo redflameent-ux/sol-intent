@@ -179,8 +179,16 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    bool keyPressed (const juce::KeyPress&) override;
 
     void setTarget (const sol::InstrumentInfo&, int articulation);
+    void undo();
+    void redo();
+    juce::Rectangle<float> getZoneBounds (int index);   // where a block is drawn (used by the tests)
+    float xForKeyPublic (int key) const { return xForKey (key); }
     const sol::InstrumentInfo& getTarget() const { return info; }
     void importWithChoice (const juce::StringArray& paths);   // asks drums vs tuned, then adds
     void addFiles (const juce::StringArray& paths, sol::Library::ImportMode);
@@ -201,6 +209,24 @@ private:
     void refreshArticulationBox();
     void askForName (const juce::String& title, const juce::String& initial, std::function<void (juce::String)> done);
     juce::Rectangle<int> mapArea() const;
+    juce::Rectangle<float> zoneRect (const sol::ZoneSpec&) const;
+    int zoneAt (juce::Point<float>) const;
+    int velAtY (float y) const;
+    void saveAndReload();           // writes the mapping without making an undo step
+    void refreshUndoButtons();
+
+    // dragging blocks on the map
+    enum class Grab { none, move, left, right, top, bottom };
+    Grab grabAt (const sol::ZoneSpec&, juce::Point<float>) const;
+    Grab grab = Grab::none;
+    sol::ZoneSpec grabStart;
+    int grabKey = 0, grabVel = 0;
+    bool dragging = false;
+
+    // undo / redo: quick edits in a row (a drag, a slider) count as one step
+    std::vector<sol::InstrumentSpec> undoStack, redoStack;
+    sol::InstrumentSpec committed;
+    bool editBurst = false;
     int keyAtX (float x) const;
     float xForKey (int key) const;
 
@@ -212,7 +238,8 @@ private:
     int viewLo = 36, viewHi = 84;
 
     juce::ComboBox artBox;
-    juce::TextButton addArt { "+ Articulation" }, renameArt { "Rename" }, deleteArt { "Delete" }, importButton { "Import files..." };
+    juce::TextButton addArt { "+ Articulation" }, renameArt { "Rename" }, deleteArt { "Delete" }, importButton { "Import files..." },
+                     undoButton { "Undo" }, redoButton { "Redo" };
     juce::ListBox zoneList { "Zones", this };
     juce::Slider root, lo, hi, velLo, velHi, gain;
     juce::Label rootL, loL, hiL, velLoL, velHiL, gainL;

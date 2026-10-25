@@ -1,5 +1,6 @@
 // Offline checks: file-name mapping, library scanning, bit-exact playback, bends and swaps.
 #include "../Source/PluginProcessor.h"
+#include "../Source/PluginEditor.h"
 #include <iostream>
 
 using namespace juce;
@@ -79,6 +80,47 @@ static int snapshot (const File& png)
     MessageManager::getInstance()->runDispatchLoopUntil (500);
     if (auto* lb = ed->findChildWithID ("x")) (void) lb;
     save (png.getSiblingFile ("ui_map.png"));
+
+    // drag the first block 5 keys to the right with the mouse, then undo it
+    MapView* mv = nullptr;
+    for (auto* c : ed->getChildren()) if (auto* m2 = dynamic_cast<MapView*> (c)) mv = m2;
+    if (mv != nullptr)
+    {
+        auto bowls = sol::InstrumentInfo { "Test Bowls", "My instruments",
+                                           File::getSpecialLocation (File::tempDirectory).getChildFile ("sol_test_lib/Test Bowls") };
+        auto rootOf = [&bowls] (const String& file)
+        {
+            auto spec2 = sol::Library::describe (bowls);
+            for (auto& z : spec2.articulations[0].zones) if (z.file.contains (file)) return z.root;
+            return -1;
+        };
+        const int rootBefore = rootOf ("Bowl C3");
+        auto zb = mv->getZoneBounds (0);
+        auto src = Desktop::getInstance().getMainMouseSource();
+        auto start = zb.getCentre();
+        auto end = start.translated (mv->xForKeyPublic (60 + 5) - mv->xForKeyPublic (60), 0.0f);
+        auto ev = [&] (Point<float> pos, bool drag)
+        {
+            return MouseEvent (src, pos, ModifierKeys (ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0, mv, mv,
+                               Time::getCurrentTime(), start, Time::getCurrentTime(), 1, drag);
+        };
+        mv->mouseDown (ev (start, false));
+        for (int s2 = 1; s2 <= 10; ++s2) mv->mouseDrag (ev (start + (end - start) * ((float) s2 / 10.0f), true));
+        MessageManager::getInstance()->runDispatchLoopUntil (100);
+        save (png.getSiblingFile ("ui_map_drag.png"));
+        if (std::getenv ("SOL_DEBUG")) std::cout << "    zone " << zb.toString() << " start " << start.toString() << " end " << end.toString()
+                                                 << " k60x " << mv->xForKeyPublic (60) << " k61x " << mv->xForKeyPublic (61) << "\n";
+        mv->mouseUp (ev (end, true));
+        const int rootAfter = rootOf ("Bowl C3");
+        std::cout << (rootAfter == rootBefore + 5 ? "  ok   " : "  FAIL ") << "dragging a block moves it 5 keys (" << rootBefore << " -> " << rootAfter << ")\n";
+        mv->undo();
+        const int rootUndone = rootOf ("Bowl C3");
+        std::cout << (rootUndone == rootBefore ? "  ok   " : "  FAIL ") << "Undo puts it back (" << rootUndone << ")\n";
+        mv->redo();
+        const int rootRedone = rootOf ("Bowl C3");
+        std::cout << (rootRedone == rootBefore + 5 ? "  ok   " : "  FAIL ") << "Redo moves it again (" << rootRedone << ")\n";
+        mv->undo();
+    }
     for (auto* c : ed->getChildren())
         if (auto* b = dynamic_cast<TextButton*> (c); b != nullptr && b->getButtonText() == "FX") b->triggerClick();
     MessageManager::getInstance()->runDispatchLoopUntil (300);
@@ -510,6 +552,43 @@ int main (int argc, char** argv)
         CHECK (fresh.getLearnedCC ("reverbMix") == 21, "a new copy of the plugin remembers your controller setup");
         p.clearMacro (0);
         p.forgetLearning ("reverbMix");
+    }
+
+    std::cout << "Cody's patch list: presets keep instruments, dry start, map undo\n";
+    {
+        SolIntentProcessor fresh2;
+        CHECK (fresh2.params.getRawParameterValue ("reverbMix")->load() < 0.0001f
+               && fresh2.params.getRawParameterValue ("chorusMix")->load() < 0.0001f
+               && fresh2.params.getRawParameterValue ("delayMix")->load() < 0.0001f, "a new copy starts with all effects off");
+
+        p.rescanLibrary();
+        auto byFolder = [&p] (const File& f) { return p.getInstrumentList()[(size_t) jmax (0, p.findInList (f))]; };
+        p.loadNow (0, byFolder (root.getChildFile ("Test Bowls")));
+        p.params.getParameter ("tone")->setValueNotifyingHost (0.3f);
+        CHECK (p.savePreset ("Bowl Preset"), "save a preset with Test Bowls loaded");
+        p.loadNow (0, byFolder (root.getChildFile ("Koshi Chimes/Koshi Terra")));
+        p.params.getParameter ("tone")->setValueNotifyingHost (0.9f);
+        auto pf = sol::Library::presetFolder().getChildFile ("Bowl Preset.solpreset");
+        p.loadPreset (pf);   // default: sound only
+        for (int i = 0; i < 200 && p.isLoading(); ++i) Thread::sleep (10);
+        CHECK (p.getLayerInfo (0).name == "Koshi Terra" && std::abs (p.params.getParameter ("tone")->getValue() - 0.3f) < 0.01f,
+               "preset arrows change the sound but keep the loaded instrument");
+        p.loadPreset (pf, true);
+        for (int i = 0; i < 200 && p.isLoading(); ++i) Thread::sleep (10);
+        CHECK (p.getLayerInfo (0).name == "Test Bowls", "with 'presets also change instruments' on, the preset's instrument comes back");
+        pf.deleteFile();
+
+        // the mapping file a drag writes reads back exactly (drag and undo themselves live in the window)
+        auto info = byFolder (root.getChildFile ("Test Bowls"));
+        auto spec = sol::Library::describe (info);
+        auto before = spec;
+        spec.articulations[0].zones[0].root = 72; spec.articulations[0].zones[0].lo = 70; spec.articulations[0].zones[0].hi = 74;
+        sol::Library::writeSpec (info.folder, spec);
+        auto back = sol::Library::describe (info);
+        CHECK (back.articulations[0].zones[0].lo == 70 && back.articulations[0].zones[0].hi == 74, "a moved block saves to the instrument");
+        sol::Library::writeSpec (info.folder, before);
+        auto undone = sol::Library::describe (info);
+        CHECK (undone.articulations[0].zones[0].root == before.articulations[0].zones[0].root, "writing the earlier mapping back restores it (undo)");
     }
 
     std::cout << (failures == 0 ? "\nALL PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");

@@ -90,7 +90,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SolIntentProcessor::createLa
     add (std::make_unique<AudioParameterInt>   (ParameterID { "bendRange", 1 }, "Bend", 0, 24, 12, st));
     add (std::make_unique<AudioParameterFloat> (ParameterID { "tone", 1 }, "Tone", NormalisableRange<float> (-1.0f, 1.0f), 0.0f, pct));
     add (std::make_unique<AudioParameterFloat> (ParameterID { "width", 1 }, "Width", NormalisableRange<float> (0.0f, 2.0f), 1.0f, pct));
-    add (std::make_unique<AudioParameterFloat> (ParameterID { "reverbMix", 1 }, "Space", NormalisableRange<float> (0.0f, 1.0f), 0.25f, pct));
+    add (std::make_unique<AudioParameterFloat> (ParameterID { "reverbMix", 1 }, "Space", NormalisableRange<float> (0.0f, 1.0f), 0.0f, pct));   // starts dry
     add (std::make_unique<AudioParameterFloat> (ParameterID { "reverbSize", 1 }, "Room", NormalisableRange<float> (0.0f, 1.0f), 0.8f, pct));
 
     // effects rack
@@ -824,18 +824,62 @@ bool SolIntentProcessor::savePreset (const juce::String& name)
     return xml != nullptr && xml->writeTo (sol::Library::presetFolder().getChildFile (clean + ".solpreset"));
 }
 
-bool SolIntentProcessor::loadPreset (const juce::File& f)
+// By default a preset changes the sound (knobs, effects, macros) and leaves the instruments you
+// have loaded alone. "Presets also change instruments" brings back each preset's own instruments.
+bool SolIntentProcessor::loadPreset (const juce::File& f, bool withInstruments)
 {
     auto xml = juce::XmlDocument::parse (f);
     if (xml == nullptr || ! xml->hasTagName (params.state.getType())) return false;
     auto state = juce::ValueTree::fromXml (*xml);
     state.setProperty ("preset", f.getFileNameWithoutExtension(), nullptr);
-    auto keepMap = makeState().getChildWithName ("MidiMap").createCopy();
-    state.appendChild (keepMap, nullptr);
+    auto current = makeState();
+    state.appendChild (current.getChildWithName ("MidiMap").createCopy(), nullptr);
+
+    if (! withInstruments)
+    {
+        // keep the loaded instruments, their articulations, which layers are on, and their key zones
+        for (int i = 0; i < numLayers; ++i)
+        {
+            state.removeChild (state.getChildWithProperty ("index", i), nullptr);
+            if (auto lt = current.getChildWithProperty ("index", i); lt.isValid() && lt.hasType ("Layer"))
+                state.appendChild (lt.createCopy(), nullptr);
+            for (auto what : { "On", "KeyLo", "KeyHi" })
+            {
+                auto id = layerParam (i, what);
+                for (auto p : state)
+                    if (p.hasType ("PARAM") && p["id"].toString() == id)
+                        p.setProperty ("value", params.getRawParameterValue (id)->load(), nullptr);
+            }
+        }
+        // only the sound changes, so the instruments don't need reloading
+        params.replaceState (state);
+        currentPresetName = f.getFileNameWithoutExtension();
+        {
+            std::lock_guard<std::mutex> g (macroMutex);
+            macroLinks.clear();
+            for (int m = 0; m < numMacros; ++m) macroNames[(size_t) m] = "Macro " + juce::String (m + 1);
+            for (auto c : state.getChildWithName ("Macros"))
+            {
+                if (c.hasType ("Name")) { int m = c["index"]; if (m >= 0 && m < numMacros) macroNames[(size_t) m] = c["text"].toString(); }
+                if (c.hasType ("Link"))
+                {
+                    int m = c["macro"];
+                    if (m >= 0 && m < numMacros && params.getParameter (c["param"].toString()) != nullptr)
+                        macroLinks.push_back ({ m, c["param"].toString(), (float) c["from"], (float) c["to"] });
+                }
+            }
+        }
+        for (int m = 0; m < numMacros; ++m) lastMacro[(size_t) m] = params.getParameter ("macro" + juce::String (m + 1))->getValue();
+        return true;
+    }
+
     stopAllSound();
     applyState (state);
     return true;
 }
+
+bool SolIntentProcessor::presetsChangeInstruments() const { return sol::Library::getSetting ("presetsChangeInstruments") == "1"; }
+void SolIntentProcessor::setPresetsChangeInstruments (bool b) { sol::Library::setSetting ("presetsChangeInstruments", b ? "1" : "0"); }
 
 juce::AudioProcessorEditor* SolIntentProcessor::createEditor() { return new SolIntentEditor (*this); }
 

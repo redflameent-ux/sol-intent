@@ -68,7 +68,9 @@ public:
     // ---- presets
     juce::Array<juce::File> getPresets() const;
     bool savePreset (const juce::String& name);
-    bool loadPreset (const juce::File&);
+    bool loadPreset (const juce::File&, bool withInstruments = false);
+    bool presetsChangeInstruments() const;          // a per-computer choice in the preset menu
+    void setPresetsChangeInstruments (bool);
     juce::String currentPresetName { "Init" };
 
     // ---- macros: each of the 4 macro knobs moves any number of other knobs between two settings

@@ -696,7 +696,7 @@ void SolIntentEditor::showPresetMenu()
 {
     PopupMenu m;
     auto presets = proc.getPresets();
-    m.addItem (1, "Init (reset every knob)");
+    m.addItem (1, "Init (reset the sound, keep the instruments)");
     m.addSeparator();
     for (int i = 0; i < presets.size(); ++i)
         m.addItem (100 + i, presets[i].getFileNameWithoutExtension(), true, presets[i].getFileNameWithoutExtension() == proc.currentPresetName);
@@ -704,16 +704,32 @@ void SolIntentEditor::showPresetMenu()
     m.addSeparator();
     m.addItem (3, "Save as new preset...");
     m.addItem (4, "Open presets folder");
+    m.addSeparator();
+    m.addItem (5, "Presets also change instruments", true, proc.presetsChangeInstruments());
     m.showMenuAsync (PopupMenu::Options().withTargetComponent (&presetButton), [this, presets] (int r)
     {
         if (r == 1)
         {
-            for (auto* prm : proc.getParameters()) prm->setValueNotifyingHost (prm->getDefaultValue());
+            for (auto* prm : proc.getParameters())
+            {
+                auto* ranged = dynamic_cast<RangedAudioParameter*> (prm);
+                auto id = ranged != nullptr ? ranged->getParameterID() : String();
+                // keep which layers are on and their key zones - those belong to the instruments
+                if (id.length() > 1 && (id.substring (1) == "On" || id.substring (1) == "KeyLo" || id.substring (1) == "KeyHi")) continue;
+                prm->setValueNotifyingHost (prm->getDefaultValue());
+            }
+            for (int k = 0; k < SolIntentProcessor::numMacros; ++k) proc.clearMacro (k);
             proc.currentPresetName = "Init";
         }
         if (r == 3) savePresetAs();
         if (r == 4) sol::Library::presetFolder().startAsProcess();
-        if (r >= 100 && r - 100 < presets.size()) proc.loadPreset (presets[r - 100]);
+        if (r == 5)
+        {
+            proc.setPresetsChangeInstruments (! proc.presetsChangeInstruments());
+            proc.setStatus (proc.presetsChangeInstruments() ? "Presets will now load their own instruments too."
+                                                            : "Presets now change only the sound and keep your instruments.");
+        }
+        if (r >= 100 && r - 100 < presets.size()) proc.loadPreset (presets[r - 100], proc.presetsChangeInstruments());
     });
 }
 
@@ -725,7 +741,7 @@ void SolIntentEditor::stepPreset (int delta)
     for (int i = 0; i < presets.size(); ++i)
         if (presets[i].getFileNameWithoutExtension() == proc.currentPresetName) cur = i;
     int next = cur < 0 ? (delta > 0 ? 0 : presets.size() - 1) : (cur + delta + presets.size()) % presets.size();
-    proc.loadPreset (presets[next]);
+    proc.loadPreset (presets[next], proc.presetsChangeInstruments());
 }
 
 void SolIntentEditor::savePresetAs()
