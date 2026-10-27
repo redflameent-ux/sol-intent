@@ -404,12 +404,15 @@ bool Library::writeSpec (const juce::File& folder, const InstrumentSpec& spec)
 }
 
 // ------------------------------------------------------------------------------ octave copies
+static constexpr int octaveTaps = 24;   // each side of the half-band filter
+
 void Zone::buildOctaves()
 {
     // half-band low-pass (windowed sinc, Blackman), then keep every other sample
-    constexpr int N = 24;
-    static const std::array<float, 2 * N + 1> h = []
+    constexpr int N = octaveTaps;
+    static const std::array<float, 2 * octaveTaps + 1> h = []
     {
+        constexpr int N = octaveTaps;
         std::array<float, 2 * N + 1> k {};
         double sum = 0.0;
         for (int j = -N; j <= N; ++j)
