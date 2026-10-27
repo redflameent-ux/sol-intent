@@ -3,6 +3,7 @@
 #include <map>
 #include <algorithm>
 #include <cmath>
+#include <array>
 
 namespace sol
 {
@@ -23,10 +24,17 @@ const Zone* Articulation::findZone (int note, int velocity, unsigned int rrCount
         if (note >= z.loKey && note <= z.hiKey && velocity >= z.loVel && velocity <= z.hiVel && count < 64)
             candidates[count++] = &z;
 
-    if (count == 0)   // gap in the velocity layers: ignore velocity
+    if (count == 0)   // gap in the velocity layers: use the nearest layer (not a random mix of all of them)
+    {
+        int best = 1000;
         for (auto& z : zones)
-            if (note >= z.loKey && note <= z.hiKey && count < 64)
+            if (note >= z.loKey && note <= z.hiKey)
+                best = juce::jmin (best, velocity < z.loVel ? z.loVel - velocity : velocity - z.hiVel);
+        for (auto& z : zones)
+            if (note >= z.loKey && note <= z.hiKey && count < 64
+                && (velocity < z.loVel ? z.loVel - velocity : velocity - z.hiVel) == best)
                 candidates[count++] = &z;
+    }
 
     // several recordings answer the same key + velocity = round robin
     return count > 0 ? candidates[rrCounter % (unsigned int) count] : nullptr;
@@ -395,6 +403,59 @@ bool Library::writeSpec (const juce::File& folder, const InstrumentSpec& spec)
     return folder.getChildFile ("instrument.json").replaceWithText (juce::JSON::toString (juce::var (root)));
 }
 
+// ------------------------------------------------------------------------------ octave copies
+void Zone::buildOctaves()
+{
+    // half-band low-pass (windowed sinc, Blackman), then keep every other sample
+    constexpr int N = 24;
+    static const std::array<float, 2 * N + 1> h = []
+    {
+        std::array<float, 2 * N + 1> k {};
+        double sum = 0.0;
+        for (int j = -N; j <= N; ++j)
+        {
+            const double x = 0.45 * j;   // cutoff a little under half the band
+            const double sinc = j == 0 ? 1.0 : std::sin (juce::MathConstants<double>::pi * x) / (juce::MathConstants<double>::pi * x);
+            const double t = (double) (j + N) / (2.0 * N);
+            const double win = 0.42 - 0.5 * std::cos (juce::MathConstants<double>::twoPi * t) + 0.08 * std::cos (2.0 * juce::MathConstants<double>::twoPi * t);
+            k[(size_t) (j + N)] = (float) (sinc * win);
+            sum += sinc * win;
+        }
+        for (auto& v : k) v = (float) (v / sum);
+        return k;
+    }();
+
+    octaves.clear();
+    const juce::AudioBuffer<float>* src = &audio;
+    for (int level = 1; level <= 3; ++level)
+    {
+        const int inLen = src->getNumSamples(), outLen = inLen / 2;
+        if (outLen < 64) break;
+        juce::AudioBuffer<float> dst (2, outLen);
+        for (int c = 0; c < 2; ++c)
+        {
+            const float* x = src->getReadPointer (c);
+            float* y = dst.getWritePointer (c);
+            for (int i = 0; i < outLen; ++i)
+            {
+                const int centre = 2 * i;
+                float acc = 0.0f;
+                if (centre >= N && centre + N < inLen)
+                    for (int j = -N; j <= N; ++j) acc += h[(size_t) (j + N)] * x[centre + j];
+                else
+                    for (int j = -N; j <= N; ++j)
+                    {
+                        const int idx = centre + j;
+                        if (idx >= 0 && idx < inLen) acc += h[(size_t) (j + N)] * x[idx];
+                    }
+                y[i] = acc;
+            }
+        }
+        octaves.push_back (std::move (dst));
+        src = &octaves.back();
+    }
+}
+
 // ------------------------------------------------------------------------------ loading audio
 static bool readFile (const juce::File& f, juce::AudioFormatManager& fm, Zone& z)
 {
@@ -410,6 +471,7 @@ static bool readFile (const juce::File& f, juce::AudioFormatManager& fm, Zone& z
         z.audio.copyFrom (1, 0, z.audio, 0, 0, len);
     z.sampleRate = r->sampleRate;
     z.fileName = f.getFileName();
+    z.buildOctaves();
     return true;
 }
 
@@ -517,6 +579,7 @@ InstrumentPtr Library::makeDemoBowl()
             L[i] *= f * f; R[i] *= f * f;
         }
         z.audio.applyGain (0.25f);
+        z.buildOctaves();
         layout.zones.push_back ({ {}, root });
         art.zones.push_back (std::move (z));
     }

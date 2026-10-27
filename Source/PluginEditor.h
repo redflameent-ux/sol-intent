@@ -322,10 +322,11 @@ private:
 
     juce::OwnedArray<ParamKnob> knobs;
     juce::ToggleButton letRing { "Let ring" };
+    juce::ToggleButton choke { "Choke" };
     juce::ComboBox keyswitch;
     juce::Label keyswitchL, zoneL;
     juce::Slider zoneLo, zoneHi;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> letRingAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> letRingAtt, chokeAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> zoneLoAtt, zoneHiAtt;
     int controlsLayer = -1;
     void pointLayerControlsAt (int layer);

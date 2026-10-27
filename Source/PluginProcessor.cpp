@@ -1,7 +1,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-static constexpr int voicesPerLayer = 48;   // bowls ring a long time, so plenty of voices
+static constexpr int voicesPerLayer = 64;   // bowls and drums ring a long time, so plenty of voices
 static constexpr int chunk = 32;           // modulation updates every 32 samples
 
 SolIntentProcessor::SolIntentProcessor()
@@ -36,6 +36,7 @@ SolIntentProcessor::SolIntentProcessor()
         P.sus[i] = params.getRawParameterValue (layerParam (i, "Sus"));
         P.rel[i] = params.getRawParameterValue (layerParam (i, "Rel"));
         P.ring[i] = params.getRawParameterValue (layerParam (i, "Ring"));
+        P.choke[i] = params.getRawParameterValue (layerParam (i, "Choke"));
         P.keyLo[i] = params.getRawParameterValue (layerParam (i, "KeyLo"));
         P.keyHi[i] = params.getRawParameterValue (layerParam (i, "KeyHi"));
     }
@@ -138,6 +139,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout SolIntentProcessor::createLa
         add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Sus"), 1 }, L + " Sustain", NormalisableRange<float> (0.0f, 1.0f), 1.0f, pct));
         add (std::make_unique<AudioParameterFloat> (ParameterID { layerParam (i, "Rel"), 1 }, L + " Release", NormalisableRange<float> (0.02f, 60.0f, 0.01f, 0.3f), 3.0f, sec));     // up to 60 s
         add (std::make_unique<AudioParameterBool>  (ParameterID { layerParam (i, "Ring"), 1 }, L + " Let Ring", true));
+        add (std::make_unique<AudioParameterBool>  (ParameterID { layerParam (i, "Choke"), 1 }, L + " Choke", false));   // a new hit damps the last one on that key
         add (std::make_unique<AudioParameterInt>   (ParameterID { layerParam (i, "KeyLo"), 1 }, L + " Lowest Key", 0, 127, 0, note));
         add (std::make_unique<AudioParameterInt>   (ParameterID { layerParam (i, "KeyHi"), 1 }, L + " Highest Key", 0, 127, 127, note));
     }
@@ -157,6 +159,8 @@ void SolIntentProcessor::prepareToPlay (double sampleRate, int block)
     {
         l.synth.setCurrentPlaybackSampleRate (sampleRate);
         l.buffer.setSize (2, juce::jmax (block, 512));
+        l.midi.ensureSize (8192);
+        l.chunkMidi.ensureSize (8192);
     }
     reverb.setSampleRate (sampleRate);
     reverb.reset();
@@ -293,6 +297,8 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
         s.sustain    = mod (P.sus[i]);
         s.releaseSec = mod (P.rel[i]);
         s.letRing    = P.ring[i]->load() > 0.5f;
+        s.choke      = P.choke[i]->load() > 0.5f;
+        l.synth.choke = s.choke;
 
         // this layer only hears notes inside its key zone (note-offs always pass, so nothing hangs)
         const int lo = (int) P.keyLo[i]->load(), hi = (int) P.keyHi[i]->load();
@@ -342,7 +348,19 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
             auto& l = layers[(size_t) i];
             l.settings.tuneSemis = baseTune + mod (P.tun[i]);
             if (on[i])
-                l.synth.renderNextBlock (l.buffer, l.midi, start, len);
+            {
+                // The synth plays every event it's handed (even ones after the slice), so hand it only this
+                // slice's events - otherwise a note landing mid-buffer was started once per slice, stacking up
+                // to 25 copies of the same hit.
+                l.chunkMidi.clear();
+                for (auto it = l.midi.findNextSamplePosition (start); it != l.midi.cend(); ++it)
+                {
+                    const auto meta = *it;
+                    if (meta.samplePosition >= start + len) break;
+                    l.chunkMidi.addEvent (meta.data, meta.numBytes, meta.samplePosition);
+                }
+                l.synth.renderNextBlock (l.buffer, l.chunkMidi, start, len);
+            }
 
             // layer level and pan (constant power), LFO pan / volume on top
             float pan = juce::jlimit (-1.0f, 1.0f, mod (P.pan[i]));

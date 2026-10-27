@@ -53,7 +53,11 @@ struct Zone
 {
     juce::String fileName;
     juce::AudioBuffer<float> audio;     // always 2 channels
+    // the same recording filtered and halved again and again (1/2, 1/4, 1/8 rate), so playing it
+    // faster - a higher note, or a 96 kHz file in a 48 kHz session - never folds back as harsh noise
+    std::vector<juce::AudioBuffer<float>> octaves;
     double sampleRate = 44100.0;
+    void buildOctaves();
     int rootNote = 60, loKey = 60, hiKey = 60, loVel = 0, hiVel = 127;
     float gain = 1.0f;
 };

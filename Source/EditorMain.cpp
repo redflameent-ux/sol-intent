@@ -114,6 +114,9 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     letRing.setTooltip ("On (one-shot): this layer's recordings ring out fully after you let go, like the real instrument.\n"
                         "Off (sustained): they play while you hold the key, then fade by the Release time.");
     addAndMakeVisible (letRing);
+    choke.setTooltip ("For drums: hitting the same key again damps the hit that's still ringing, like a hand on the drum head.\n"
+                      "Off: every hit rings out on top of the last one (best for bowls).");
+    addAndMakeVisible (choke);
 
     for (auto* zs : { &zoneLo, &zoneHi })
     {
@@ -149,7 +152,7 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     keyswitchAtt = std::make_unique<AudioProcessorValueTreeState::ComboBoxAttachment> (proc.params, "keyswitch", keyswitch);
 
     for (auto* k : knobs) rightPanel.push_back (k);
-    for (auto* c : std::initializer_list<Component*> { &letRing, &zoneLo, &zoneHi, &zoneL, &keyswitch, &keyswitchL })
+    for (auto* c : std::initializer_list<Component*> { &letRing, &choke, &zoneLo, &zoneHi, &zoneL, &keyswitch, &keyswitchL })
         rightPanel.push_back (c);
 
     refreshList();
@@ -317,8 +320,9 @@ void SolIntentEditor::resized()
     auto row = k.removeFromTop (kh);
     for (int i = 0; i < 4; ++i) place (i, row.removeFromLeft (cw));
     row = k.removeFromTop (30);
-    letRing.setBounds (row.removeFromLeft (cw + 20).reduced (0, 2));
-    zoneL.setBounds (row.removeFromLeft (38));
+    letRing.setBounds (row.removeFromLeft (cw + 14).reduced (0, 2));
+    choke.setBounds (row.removeFromLeft (cw + 6).reduced (0, 2));
+    zoneL.setBounds (row.removeFromLeft (30));
     zoneLo.setBounds (row.removeFromLeft ((row.getWidth() - 6) / 2).reduced (0, 3));
     row.removeFromLeft (6);
     zoneHi.setBounds (row.reduced (0, 3));
@@ -422,6 +426,8 @@ void SolIntentEditor::pointLayerControlsAt (int layer)
     knobs[3]->setParam (id ("Rel"), "Release");
     letRingAtt.reset();
     letRingAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (proc.params, id ("Ring"), letRing);
+    chokeAtt.reset();
+    chokeAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (proc.params, id ("Choke"), choke);
     zoneLoAtt.reset(); zoneHiAtt.reset();
     zoneLoAtt = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.params, id ("KeyLo"), zoneLo);
     zoneHiAtt = std::make_unique<AudioProcessorValueTreeState::SliderAttachment> (proc.params, id ("KeyHi"), zoneHi);

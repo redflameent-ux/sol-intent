@@ -34,6 +34,8 @@ public:
     bool acceptsMidi() const override  { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
+    // how many voices a layer is using (for the tests)
+    int debugActiveVoices (int layer) { int n = 0; for (int i = 0; i < layers[(size_t) layer].synth.getNumVoices(); ++i) if (layers[(size_t) layer].synth.getVoice (i)->isVoiceActive()) ++n; return n; }
     bool supportsMPE() const override { return true; }   // tells Logic to send each note on its own channel
     double getTailLengthSeconds() const override { return 30.0; }
 
@@ -123,7 +125,20 @@ public:
 private:
     struct Layer
     {
-        juce::Synthesiser synth;
+        // a Synthesiser that can damp a hit still ringing on the same key when it's struck again (drums)
+        struct Synth : juce::Synthesiser
+        {
+            bool choke = false;
+            void noteOn (int ch, int note, float vel) override
+            {
+                if (choke)
+                    for (auto* v : voices)
+                        if (v->getCurrentlyPlayingNote() == note && v->isPlayingChannel (ch))
+                            if (auto* sv = dynamic_cast<sol::SamplerVoice*> (v)) sv->choke();
+                juce::Synthesiser::noteOn (ch, note, vel);
+            }
+        };
+        Synth synth;
         sol::VoiceSettings settings;
         juce::SpinLock swapLock;
         sol::InstrumentPtr pending, current, display;
@@ -135,6 +150,7 @@ private:
         float gainL = 0.0f, gainR = 0.0f;
         bool wasOn = true;
         juce::MidiBuffer midi;   // only the notes inside this layer's key zone
+        juce::MidiBuffer chunkMidi;   // just the events inside the 32-sample slice being rendered
     };
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
@@ -152,7 +168,7 @@ private:
                            *eqLow, *eqMid, *eqHigh, *chorusMix, *chorusDepth, *chorusRate, *delayTime, *delayFb, *delayMix,
                            *morphOn, *morphX, *morphY;
         std::atomic<float> *on[numLayers], *vol[numLayers], *tun[numLayers], *pan[numLayers],
-                           *atk[numLayers], *dec[numLayers], *sus[numLayers], *rel[numLayers], *ring[numLayers],
+                           *atk[numLayers], *dec[numLayers], *sus[numLayers], *rel[numLayers], *ring[numLayers], *choke[numLayers],
                            *keyLo[numLayers], *keyHi[numLayers];
         std::atomic<float> *macro[numMacros];
     } P;

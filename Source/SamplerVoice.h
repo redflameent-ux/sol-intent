@@ -14,6 +14,7 @@ struct VoiceSettings
     float tuneSemis = 0.0f;       // everything that shifts pitch, combined
     float attackSec = 0.0f, decaySec = 0.5f, sustain = 1.0f, releaseSec = 3.0f;
     bool  letRing = true;
+    bool  choke = false;          // hitting a note again quickly damps the hit still ringing on that key (drums)
     float velSens = 0.7f;
     float bendRange = 12.0f;
     unsigned int rrCounter = 0;
@@ -42,6 +43,7 @@ public:
     using juce::SynthesiserVoice::renderNextBlock;
 
     float getLevel() const noexcept { return level; }
+    void choke();                  // fade this hit out quickly - the same key was struck again
 
 private:
     static float bendFromWheel (int v) { return juce::jlimit (-1.0f, 1.0f, (v - 8192) / 8191.0f); }
@@ -59,6 +61,20 @@ private:
     bool  released = false;        // key let go while "let ring" was on
     juce::ADSR env;
     float level = 0.0f;            // for the display
+    int   octave = 0;              // which filtered copy is being read (0 = the original)
+    int   chokeLeft = 0, chokeLen = 1;
+    bool  chokeDone = false;
+    float lastGainL = 0.0f, lastGainR = 0.0f;   // what was applied to the last sample (to hand over to the tail)
+    double lastRatio = 1.0;
+
+    // when a voice is taken over by a new note, the old sound fades out over ~3 ms instead of stopping dead
+    struct Tail { const Zone* zone = nullptr; double pos = 0.0, ratio = 1.0; float gainL = 0.0f, gainR = 0.0f; int octave = 0, left = 0; };
+    Tail tail;
+    static constexpr int tailLen = 144;
+
+    static void read (const Zone&, int octave, double pos, float& l, float& r);
+    static int  octaveFor (const Zone&, double ratio, int current);
+    void renderTail (float* L, float* R, int num);
 };
 
 } // namespace sol

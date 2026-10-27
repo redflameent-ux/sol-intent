@@ -2,6 +2,14 @@
 
 Newest changes first. Every build is on the [Releases page](../../releases/tag/latest).
 
+## 0.12 (27 Oct 2026): Playback fixes from Cody's Logic tests
+- **Fixed: notes played many times over.** A note that landed partway through an audio buffer, which is nearly every note coming from Logic, was being started up to 25 times at once. This caused the strange phasey artifacts, the random-sounding velocity, and the clicks once all the voices filled up. Each note now plays once.
+- **Velocity is much stronger.** With Touch at 70%, a hit at velocity 64 is about 10 dB quieter than a full hit (before, only about 3 dB). At 100% the difference is about 15 dB, and at 0% every hit is the same.
+- **New Choke switch** (next to Let ring). For drums: hitting the same key again damps the hit that's still ringing, like a hand on the drum head. Leave it off for bowls so they ring over each other.
+- **No clicks when voices run out.** If so many hits are ringing that a voice has to be reused, the old sound now fades out in about 3 ms instead of stopping dead. Each layer also has more voices (64, up from 48).
+- **Velocity layers:** if a hit's velocity falls in a gap between layers, it now plays the nearest layer instead of switching between all of them.
+- **Cleaner high notes and high sample rates.** Recordings played faster than they were recorded, such as higher notes or a 96 kHz file in a 48 kHz session, no longer turn harsh or grainy.
+
 ## 0.11 (25 Oct 2026): Full name
 - The full name, Sol Intent: Sonic Alchemy Sampler, now shows beside the logo, in the Windows installer and in the read-me.
 - The background glow leans green instead of blue, with indigo kept as a small accent.

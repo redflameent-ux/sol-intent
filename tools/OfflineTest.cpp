@@ -1031,6 +1031,218 @@ int main (int argc, char** argv)
         p.stopAllSound(); render (p, out, m, 2, bs);
     }
 
+    std::cout << "Fast repeated drum hits (a Logic pattern, past bar 17)\n";
+    {
+        // a frame drum: two velocity layers on C2, each a 10-second ringing hit (real recordings ring long)
+        auto writeHit = [] (const File& f, double freq, float amp)
+        {
+            f.getParentDirectory().createDirectory(); f.deleteFile();
+            WavAudioFormat wav;
+            std::unique_ptr<OutputStream> os (f.createOutputStream());
+            std::unique_ptr<AudioFormatWriter> w (wav.createWriterFor (os.get(), 48000.0, 1, 24, {}, 0));
+            os.release();
+            AudioBuffer<float> b (1, 48000 * 10);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+                b.setSample (0, i, amp * (float) std::sin (MathConstants<double>::twoPi * freq * i / 48000.0) * std::exp (-i / 90000.0f));
+            w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+        };
+        writeHit (root.getChildFile ("Drum Loop/C2 v1.wav"), 110.0, 0.4f);
+        writeHit (root.getChildFile ("Drum Loop/C2 v2.wav"), 110.0, 0.8f);
+        p.stopAllSound(); render (p, out, m, 2, bs);
+        p.rescanLibrary();
+        p.loadNow (0, p.getInstrumentList()[(size_t) jmax (0, p.findInList (root.getChildFile ("Drum Loop")))]);
+        for (auto id : { "bOn", "cOn", "dOn", "morphOn" }) p.params.getParameter (id)->setValueNotifyingHost (0.0f);
+        p.params.getParameter ("aRing")->setValueNotifyingHost (1.0f);
+        p.params.getParameter ("reverbMix")->setValueNotifyingHost (0.0f);
+        render (p, out, m, 4, bs);
+
+        // 16th notes at 120 bpm for 24 bars, alternating a soft hit and a hard (127) hit
+        const int step = (int) (sr * 0.125), bars = 24, hits = bars * 16;
+        const int total = hits * step + (int) sr;
+        AudioBuffer<float> rec (2, total + bs);
+        rec.clear();
+        int nextHit = 0, pos = 0;
+        while (pos < total)
+        {
+            while (nextHit < hits && nextHit * step < pos + bs)
+            {
+                const int at = nextHit * step - pos;
+                const uint8 vel = (nextHit % 2 == 0) ? (uint8) 90 : (uint8) 127;
+                m.addEvent (MidiMessage::noteOn (1, 36, vel), at);
+                if (at + step / 2 < bs) m.addEvent (MidiMessage::noteOff (1, 36), at + step / 2);
+                ++nextHit;
+            }
+            // note-offs that land in the next block
+            p.processBlock (out, m); m.clear();
+            for (int k = 0; k < 2; ++k) rec.copyFrom (k, pos, out, k, 0, bs);
+            pos += bs;
+            for (int h = jmax (0, nextHit - 4); h < nextHit; ++h)
+            {
+                const int off = h * step + step / 2 - pos;
+                if (off >= 0 && off < bs) m.addEvent (MidiMessage::noteOff (1, 36), off);
+            }
+        }
+
+        // clicks: a sudden jump far bigger than the waveform itself ever makes
+        float worstJump = 0.0f, smoothJump = 0.0f;
+        for (int i = 1; i < hits * step; ++i)
+            worstJump = jmax (worstJump, std::abs (rec.getSample (0, i) - rec.getSample (0, i - 1)));
+        for (int i = 1; i < 4 * 16 * step; ++i)   // the first 4 bars, before any voice could run out
+            smoothJump = jmax (smoothJump, std::abs (rec.getSample (0, i) - rec.getSample (0, i - 1)));
+        CHECK (worstJump < smoothJump * 1.6f, "no clicks all the way through 24 bars of 16ths (worst step "
+               + String (worstJump, 4) + " vs " + String (smoothJump, 4) + " in bar 1-4)");
+
+        // the same pattern should sound the same in bar 17 as in bar 5
+        auto barLevel = [&] (int bar)
+        {
+            const int s = bar * 16 * step;
+            return rec.getRMSLevel (0, s, 16 * step);
+        };
+        const float b5 = barLevel (4), b17 = barLevel (16), b23 = barLevel (22);
+        CHECK (std::abs (Decibels::gainToDecibels (b17 / b5)) < 0.5f && std::abs (Decibels::gainToDecibels (b23 / b5)) < 0.5f,
+               "bar 17 and bar 23 are as loud as bar 5 (" + String (Decibels::gainToDecibels (b17 / b5), 2) + " / "
+               + String (Decibels::gainToDecibels (b23 / b5), 2) + " dB)");
+
+        // velocity changes the level of a hit
+        p.stopAllSound(); render (p, out, m, 40, bs);
+        auto hitPeak = [&] (uint8 vel)
+        {
+            p.stopAllSound(); render (p, out, m, 4, bs);
+            m.addEvent (MidiMessage::noteOn (1, 36, vel), 0);
+            float pk = 0.0f;
+            for (int b = 0; b < 20; ++b) { p.processBlock (out, m); m.clear(); pk = jmax (pk, out.getMagnitude (0, 0, bs)); }
+            m.addEvent (MidiMessage::noteOff (1, 36), 0);
+            return pk;
+        };
+        const float v40 = hitPeak (40), v63 = hitPeak (63), v64 = hitPeak (64), v127 = hitPeak (127);
+        CHECK (v40 < v63 * 0.6f && v64 < v127 * 0.4f, "velocity is clearly heard: softer hits are well down within each layer ("
+               + String (Decibels::gainToDecibels (v40 / v63), 1) + " dB, " + String (Decibels::gainToDecibels (v64 / v127), 1) + " dB)");
+        p.stopAllSound(); render (p, out, m, 4, bs);
+
+        // a note that lands part-way through a buffer (as almost every note from Logic does) starts exactly one voice
+        {
+            p.stopAllSound(); render (p, out, m, 4, bs);
+            m.addEvent (MidiMessage::noteOn (1, 36, (uint8) 100), 384);
+            render (p, out, m, 2, bs);
+            const int v = p.debugActiveVoices (0);
+            CHECK (v == 1, "a note landing mid-buffer plays once, not once per slice (" + String (v) + " voice" + (v == 1 ? "" : "s") + ")");
+            m.addEvent (MidiMessage::noteOff (1, 36), 100);
+            p.stopAllSound(); render (p, out, m, 4, bs);
+        }
+
+        // Choke: a second hit on the same key damps the first
+        {
+            writeHit (root.getChildFile ("Steady Hit/C2.wav"), 110.0, 0.5f);   // 110 Hz, 0.2 s apart = exactly in step
+            p.rescanLibrary();
+            p.loadNow (0, p.getInstrumentList()[(size_t) jmax (0, p.findInList (root.getChildFile ("Steady Hit")))]);
+            render (p, out, m, 4, bs);
+            auto twoHits = [&] (bool chokeOn)
+            {
+                p.params.getParameter ("aChoke")->setValueNotifyingHost (chokeOn ? 1.0f : 0.0f);
+                p.stopAllSound(); render (p, out, m, 4, bs);
+                const int gap = (int) (sr * 0.2);
+                AudioBuffer<float> rec2 (2, gap * 3 + bs);
+                int at = 0;
+                for (int b = 0; at < gap * 3; ++b, at += bs)
+                {
+                    if (at == 0) m.addEvent (MidiMessage::noteOn (1, 36, (uint8) 100), 0);
+                    if (at <= gap && at + bs > gap) m.addEvent (MidiMessage::noteOn (1, 36, (uint8) 100), gap - at);
+                    p.processBlock (out, m); m.clear();
+                    for (int k = 0; k < 2; ++k) rec2.copyFrom (k, at, out, k, 0, bs);
+                }
+                float jump = 0.0f;
+                for (int i = gap - 2000; i < gap + 4000; ++i) jump = jmax (jump, std::abs (rec2.getSample (0, i) - rec2.getSample (0, i - 1)));
+                return std::pair<float, float> { rec2.getRMSLevel (0, gap * 2, gap / 2), jump };
+            };
+            const auto [ringing, jumpOff] = twoHits (false);
+            const auto [choked, jumpOn] = twoHits (true);
+            CHECK (Decibels::gainToDecibels (choked / ringing) < -4.5f, "with Choke on, hitting the key again damps the last hit ("
+                   + String (Decibels::gainToDecibels (choked / ringing), 1) + " dB vs both ringing)");
+            CHECK (jumpOn < jumpOff * 1.3f, "and the damping is smooth, no click (" + String (jumpOn, 4) + " vs " + String (jumpOff, 4) + ")");
+            p.params.getParameter ("aChoke")->setValueNotifyingHost (0.0f);
+            p.stopAllSound(); render (p, out, m, 4, bs);
+        }
+    }
+
+    std::cout << "No click when a voice is handed to a new note\n";
+    {
+        auto tone = std::make_shared<sol::Instrument>();
+        tone->name = "Steady";
+        sol::Articulation art;
+        art.name = "Strike";
+        sol::Zone z;
+        z.audio.setSize (2, (int) sr * 2);
+        for (int i = 0; i < z.audio.getNumSamples(); ++i)
+            z.audio.setSample (0, i, 0.5f * (float) std::sin (MathConstants<double>::twoPi * 200.0 * i / sr)), z.audio.setSample (1, i, z.audio.getSample (0, i));
+        z.sampleRate = sr; z.rootNote = 60; z.loKey = 0; z.hiKey = 127;
+        z.buildOctaves();
+        art.zones.push_back (std::move (z));
+        art.lowestKey = 0; art.highestKey = 127;
+        tone->articulations.push_back (std::move (art));
+        sol::VoiceSettings vs;
+        vs.instrument = tone.get();
+        juce::Synthesiser one;
+        one.addVoice (new sol::SamplerVoice (vs));   // a single voice, so the second note has to take it over
+        one.addSound (new sol::AnySound());
+        one.setCurrentPlaybackSampleRate (sr);
+        AudioBuffer<float> o (2, bs);
+        MidiBuffer mm;
+        const int blocks = (int) (sr * 1.0 / bs);
+        AudioBuffer<float> rec3 (2, blocks * bs);
+        const int stealBlock = blocks / 2;
+        for (int b = 0; b < blocks; ++b)
+        {
+            if (b == 0) mm.addEvent (MidiMessage::noteOn (1, 60, (uint8) 110), 0);
+            if (b == stealBlock) mm.addEvent (MidiMessage::noteOn (1, 72, (uint8) 110), 0);
+            o.clear();
+            one.renderNextBlock (o, mm, 0, bs);
+            mm.clear();
+            for (int k = 0; k < 2; ++k) rec3.copyFrom (k, b * bs, o, k, 0, bs);
+        }
+        float before = 0.0f, at = 0.0f;
+        for (int i = stealBlock * bs - 6000; i < stealBlock * bs - 10; ++i) before = jmax (before, std::abs (rec3.getSample (0, i) - rec3.getSample (0, i - 1)));
+        for (int i = stealBlock * bs - 4; i < stealBlock * bs + 400; ++i) at = jmax (at, std::abs (rec3.getSample (0, i) - rec3.getSample (0, i - 1)));
+        CHECK (at < before * 2.5f + 0.002f, "taking over a ringing voice fades the old sound instead of cutting it ("
+               + String (at, 4) + " vs " + String (before, 4) + " while ringing)");
+    }
+
+    std::cout << "High sample-rate recordings play clean\n";
+    {
+        // a 96 kHz recording in a 48 kHz session: a 30 kHz tone can't be heard, and must not fold back as noise
+        auto write96 = [] (const File& f, double freq)
+        {
+            f.getParentDirectory().createDirectory(); f.deleteFile();
+            WavAudioFormat wav;
+            std::unique_ptr<OutputStream> os (f.createOutputStream());
+            std::unique_ptr<AudioFormatWriter> w (wav.createWriterFor (os.get(), 96000.0, 1, 24, {}, 0));
+            os.release();
+            AudioBuffer<float> b (1, 96000 * 2);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+                b.setSample (0, i, 0.5f * (float) std::sin (MathConstants<double>::twoPi * freq * i / 96000.0));
+            w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+        };
+        write96 (root.getChildFile ("Hi Rate/C3.wav"), 30000.0);
+        write96 (root.getChildFile ("Hi Rate Low/C3.wav"), 1000.0);
+        auto levelOf = [&] (const char* name)
+        {
+            p.stopAllSound(); render (p, out, m, 2, bs);
+            p.rescanLibrary();
+            p.loadNow (0, p.getInstrumentList()[(size_t) jmax (0, p.findInList (root.getChildFile (name)))]);
+            render (p, out, m, 4, bs);
+            m.addEvent (MidiMessage::noteOn (1, 60, (uint8) 127), 0);
+            render (p, out, m, 10, bs);
+            float rms = 0.0f;
+            for (int b = 0; b < 20; ++b) { p.processBlock (out, m); m.clear(); rms = jmax (rms, out.getRMSLevel (0, 0, bs)); }
+            m.addEvent (MidiMessage::noteOff (1, 60), 0);
+            p.stopAllSound(); render (p, out, m, 2, bs);
+            return rms;
+        };
+        const float high = levelOf ("Hi Rate"), low = levelOf ("Hi Rate Low");
+        CHECK (high < low * 0.03f, "a 30 kHz tone in a 96 kHz file doesn't fold back into the audible range ("
+               + String (Decibels::gainToDecibels (high / low), 1) + " dB)");
+        CHECK (low > 0.2f, "while a 1 kHz tone in the same kind of file plays at full level (" + String (low, 3) + ")");
+    }
+
     std::cout << (failures == 0 ? "\nALL PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");
     return failures == 0 ? 0 : 1;
 }
