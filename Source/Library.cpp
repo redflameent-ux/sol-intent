@@ -159,7 +159,7 @@ static bool isInstrumentFolder (const juce::File& dir)
 std::vector<InstrumentInfo> Library::scan (const juce::File& root)
 {
     std::vector<InstrumentInfo> out;
-    out.push_back ({ "Demo Bowl (built-in)", "Built-in", juce::File() });
+    out.push_back ({ "Tibetan Bowls (Chromatic)", "Built-in", juce::File() });
 
     if (! root.isDirectory())
         return out;
@@ -526,7 +526,7 @@ InstrumentPtr Library::load (const InstrumentInfo& info, juce::AudioFormatManage
 InstrumentPtr Library::makeDemoBowl()
 {
     auto inst = std::make_shared<Instrument>();
-    inst->name = "Demo Bowl (built-in)";
+    inst->name = "Tibetan Bowls (Chromatic)";
     inst->category = "Built-in";
 
     // rings for ~22 s and fades out naturally (32 kHz keeps the memory down - it's only a demo)

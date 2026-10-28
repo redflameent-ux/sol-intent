@@ -2,6 +2,9 @@
 
 Newest changes first. Every build is on the [Releases page](../../releases/tag/latest).
 
+## 0.13 (28 Oct 2026): Tibetan Bowls
+- The built-in demo bowl is now called **Tibetan Bowls (Chromatic)**. The sound hasn't changed, and projects that use it still find it.
+
 ## 0.12 (27 Oct 2026): Playback fixes from Cody's Logic tests
 - **Fixed: notes played many times over.** A note that landed partway through an audio buffer, which is nearly every note coming from Logic, was being started up to 25 times at once. This caused the strange phasey artifacts, the random-sounding velocity, and the clicks once all the voices filled up. Each note now plays once.
 - **Velocity is much stronger.** With Touch at 70%, a hit at velocity 64 is about 10 dB quieter than a full hit (before, only about 3 dB). At 100% the difference is about 15 dB, and at 0% every hit is the same.
