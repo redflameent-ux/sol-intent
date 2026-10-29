@@ -387,6 +387,18 @@ void ResonanceView::tick()
     lastTick = now;
     phase += 0.035f;
 
+    // every new note draws the next line of the star (counted, so even the shortest hit is caught)
+    for (int n = 0; n < 128; ++n)
+    {
+        const unsigned int hits = proc.noteHits[(size_t) n].load (std::memory_order_relaxed);
+        if (hits != seenHits[(size_t) n])
+        {
+            if (starMode)
+                for (unsigned int k = 0; k < juce::jmin (3u, hits - seenHits[(size_t) n]); ++k) addStarLine (n);
+            seenHits[(size_t) n] = hits;
+        }
+    }
+
     float deepest = 0.0f;
     Colour deepestCol = breathCol;
     for (int n = 0; n < 128; ++n)
@@ -425,6 +437,23 @@ void ResonanceView::tick()
     else                    breathIn += (deepest - breathIn) * jmin (1.0f, dt * 6.0f);
     if (deepest > 0.0f) breathCol = breathCol.interpolatedWith (deepestCol, jmin (1.0f, dt * 3.0f));
 
+    if (starMode)
+    {
+        for (auto& l : star) l.grow = jmin (1.0f, l.grow + dt / 0.7f);   // each line travels from point to point
+        if (! starComplete && star.size() == 10 && star.back().grow >= 1.0f)
+        {
+            starComplete = true;   // the tenth line has closed the star: back to the source
+            starFlash = 1.0f;
+        }
+        starIdle += dt;
+        if (starFlash > 0.0f)
+        {
+            starFlash = jmax (0.0f, starFlash - dt / 3.5f);
+            if (starFlash <= 0.0f) { star.clear(); starComplete = false; }
+        }
+        else if (! star.empty() && starIdle > 14.0f) { star.clear(); }   // left alone a while: it fades and starts over
+    }
+
     for (auto& s : specks)
     {
         s.life += dt;
@@ -438,6 +467,99 @@ void ResonanceView::tick()
     repaint();
 }
 
+// ---------------------------------------------------------------------------- hidden star mode
+// The five points, clockwise from the top, and the ten-step path that draws the star: out from the top,
+// across, down, back up... the seventh line returns to the top (half way), the tenth closes it for good.
+static const int starPath[10][2] = { { 0, 4 }, { 4, 1 }, { 1, 3 }, { 3, 4 }, { 4, 2 },
+                                     { 2, 3 }, { 3, 0 }, { 0, 2 }, { 2, 1 }, { 1, 0 } };
+
+static Colour starColour (int step)   // the spectrum, root red up to crown violet, one hue per step
+{
+    return Colour::fromHSV (0.78f * (float) step / 9.0f, 0.82f, 1.0f, 1.0f);
+}
+
+void ResonanceView::setStarMode (bool on)
+{
+    starMode = on;
+    for (int n = 0; n < 128; ++n) seenHits[(size_t) n] = proc.noteHits[(size_t) n].load();   // only notes from now on count
+    star.clear();
+    starFlash = 0.0f;
+    starComplete = false;
+    repaint();
+}
+
+void ResonanceView::addStarLine (int note)
+{
+    starIdle = 0.0f;
+    if (starComplete || star.size() >= 10) { star.clear(); starComplete = false; }   // a new star begins
+    star.push_back ({ (int) star.size(), note, 0.0f });
+}
+
+void ResonanceView::paintStar (Graphics& g, Point<float> c, float R)
+{
+    const float r = R * 0.86f;
+    Point<float> v[5];
+    for (int i = 0; i < 5; ++i) v[i] = c.getPointOnCircumference (r, MathConstants<float>::twoPi * (float) i / 5.0f);
+
+    // the outer circle and a faint outline of the whole star, so its shape is always hinted at
+    g.setColour (ui::goldDim.withAlpha (0.55f));
+    g.drawEllipse (Rectangle<float> (R * 2, R * 2).withCentre (c), 1.0f);
+    g.setColour (ui::goldDim.withAlpha (0.18f));
+    for (auto& p : starPath) g.drawLine ({ v[p[0]], v[p[1]] }, 0.8f);
+
+    const float idleFade = star.empty() ? 1.0f : jlimit (0.0f, 1.0f, 1.0f - (starIdle - 10.0f) / 4.0f);
+    const float flash = starFlash;
+    const float shimmer = 0.85f + 0.15f * std::sin (phase * 2.3f);
+
+    for (auto& l : star)
+    {
+        const auto a = v[starPath[l.step][0]], b = v[starPath[l.step][1]];
+        const auto end = a + (b - a) * l.grow;
+        const float ring = jlimit (0.0f, 1.0f, std::sqrt (proc.noteGlow[(size_t) l.note].load() * 3.0f));
+        auto col = starColour (l.step).interpolatedWith (Colours::white, flash * 0.85f);
+        const float alpha = idleFade * (0.45f + 0.55f * jmax (ring, flash)) * shimmer;
+        g.setColour (col.withAlpha (0.12f * alpha));
+        g.drawLine ({ a, end }, 10.0f + 6.0f * ring);
+        g.setColour (col.withAlpha (0.30f * alpha));
+        g.drawLine ({ a, end }, 4.5f + 2.0f * ring);
+        g.setColour (col.brighter (0.4f).withAlpha (alpha));
+        g.drawLine ({ a, end }, 1.6f);
+        if (l.grow < 1.0f)   // the light travelling along the line
+        {
+            g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.95f * idleFade), end.x, end.y,
+                                               col.withAlpha (0.0f), end.x + 9.0f, end.y, true));
+            g.fillEllipse (Rectangle<float> (18.0f, 18.0f).withCentre (end));
+        }
+    }
+
+    // the five points: lit once a line has reached them
+    for (int i = 0; i < 5; ++i)
+    {
+        float lit = 0.0f;
+        Colour col = ui::goldDim;
+        for (auto& l : star)
+            if ((starPath[l.step][1] == i && l.grow >= 1.0f) || starPath[l.step][0] == i) { lit = 1.0f; col = starColour (l.step); }
+        if (i == 0 && star.size() >= 7 && star[6].grow >= 1.0f) col = Colours::white;   // half way: back at the top
+        col = col.interpolatedWith (Colours::white, flash);
+        const float sz = 6.0f + 4.0f * lit + 10.0f * flash;
+        g.setColour (col.withAlpha ((0.12f + 0.25f * lit + 0.4f * flash) * idleFade));
+        g.fillEllipse (Rectangle<float> (sz * 2.2f, sz * 2.2f).withCentre (v[i]));
+        g.setColour (col.withAlpha ((0.45f + 0.55f * jmax (lit, flash)) * idleFade));
+        g.fillEllipse (Rectangle<float> (sz * 0.7f, sz * 0.7f).withCentre (v[i]));
+    }
+
+    // the white flash when the star closes: light fills it from the centre and spreads past the ring
+    if (flash > 0.0f)
+    {
+        const float t = 1.0f - flash;
+        g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.55f * flash), c.x, c.y,
+                                           ui::gold.withAlpha (0.0f), c.x + R * (0.4f + 0.9f * t), c.y, true));
+        g.fillEllipse (Rectangle<float> (R * 2.6f, R * 2.6f).withCentre (c));
+        g.setColour (Colours::white.withAlpha (0.6f * flash));
+        g.drawEllipse (Rectangle<float> (R * 2 * (0.3f + 0.9f * t), R * 2 * (0.3f + 0.9f * t)).withCentre (c), 1.5f + 2.0f * flash);
+    }
+}
+
 void ResonanceView::paint (Graphics& g)
 {
     auto b = getLocalBounds().toFloat();
@@ -447,6 +569,12 @@ void ResonanceView::paint (Graphics& g)
     auto c = b.getCentre();
     const float R = jmin (b.getWidth(), b.getHeight()) * 0.42f;
 
+    if (starMode)
+    {
+        paintStar (g, c, R);
+    }
+    else
+    {
     // faint flower-of-life behind everything
     g.setColour (ui::goldDim.withAlpha (0.45f));
     const float fr = R * 0.33f;
@@ -507,6 +635,7 @@ void ResonanceView::paint (Graphics& g)
         g.setColour (col.withAlpha (0.4f + 0.6f * v));
         g.fillEllipse (Rectangle<float> (5.0f + 5.0f * v, 5.0f + 5.0f * v).withCentre (dot));
     }
+    }   // circle of fifths
 
     // ---- breath ----
     // breathing out: bright waves flowing from the centre past the ring
@@ -554,9 +683,10 @@ void ResonanceView::paint (Graphics& g)
         g.fillEllipse (Rectangle<float> (s.size, s.size).withCentre (p));
     }
 
-    g.setColour (ui::text);
+    g.setColour (ui::text.withAlpha (starMode ? 0.4f : 1.0f));   // the star takes the stage in star mode
     g.setFont (FontOptions (19.0f, Font::bold));
     g.drawFittedText (title, Rectangle<float> (R * 1.6f, 24).withCentre ({ c.x, c.y - 8 }).toNearestInt(), Justification::centred, 1);
+    if (starMode) return;
     g.setColour (ui::textDim);
     g.setFont (FontOptions (12.0f));
     g.drawText (subtitle, Rectangle<float> (b.getWidth(), 18).withCentre ({ c.x, c.y + 14 }), Justification::centred);

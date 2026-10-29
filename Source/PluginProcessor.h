@@ -117,6 +117,7 @@ public:
     juce::AudioProcessorValueTreeState params;
     juce::MidiKeyboardState keyboardState;
     std::array<std::atomic<float>, 128> noteGlow {};
+    std::array<std::atomic<unsigned int>, 128> noteHits {};   // counts every note-on, so the display never misses a short hit
     std::atomic<float> outputLevel { 0.0f };
     std::atomic<int> lastNote { -1 };
     int padBaseNote = 48;

@@ -76,6 +76,7 @@ SolIntentEditor::SolIntentEditor (SolIntentProcessor& p)
     browser.setRowHeight (26);
     addAndMakeVisible (browser);
     addAndMakeVisible (resonance);
+    resonance.setStarMode (sol::Library::getSetting ("starMode") == "1");
     addAndMakeVisible (pads);
     addChildComponent (mapView);
     addChildComponent (fxView);
@@ -204,6 +205,23 @@ static Image makeStarField (int w, int h)
     return img;
 }
 
+void SolIntentEditor::mouseDown (const MouseEvent& e)
+{
+    // a little secret: click the logo five times - once for each point of the star
+    if (! logoArea.contains (e.position)) return;
+    const double now = Time::getMillisecondCounterHiRes();
+    logoClicks = (now - lastLogoClick < 700.0) ? logoClicks + 1 : 1;
+    lastLogoClick = now;
+    if (logoClicks >= 5)
+    {
+        logoClicks = 0;
+        const bool on = ! resonance.isStarMode();
+        resonance.setStarMode (on);
+        sol::Library::setSetting ("starMode", on ? "1" : "0");
+        if (on) showView (0);   // the star lives on the PLAY page
+    }
+}
+
 void SolIntentEditor::paint (Graphics& g)
 {
     if (starField.getWidth() != getWidth() || starField.getHeight() != getHeight())
@@ -264,6 +282,9 @@ void SolIntentEditor::paintOverChildren (Graphics& g)
 
 void SolIntentEditor::resized()
 {
+    if (auto& logo = ui::logo(); logo.isValid())
+        logoArea = { 16.0f, 4.0f, 80.0f * (float) logo.getWidth() / (float) logo.getHeight(), 80.0f };
+
     auto area = getLocalBounds().reduced (14);
 
     // header

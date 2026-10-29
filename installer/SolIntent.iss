@@ -1,7 +1,7 @@
 ; Inno Setup script - builds Sol-Intent-Setup.exe
 [Setup]
 AppName=Sol Intent Sonic Alchemy Sampler
-AppVersion=0.13.0
+AppVersion=0.14.0
 AppPublisher=Sol Intent
 DefaultDirName={autopf}\Sol Intent
 DefaultGroupName=Sol Intent

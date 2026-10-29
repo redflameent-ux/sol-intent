@@ -76,9 +76,26 @@ public:
     void paint (juce::Graphics&) override;
     void tick();
     juce::String title, subtitle;
+
+    // hidden star mode: each note draws the next line of a pentagram, in a ten-step path that
+    // starts and ends at the top point; the tenth line closes the star and it flashes white
+    void setStarMode (bool on);
+    bool isStarMode() const { return starMode; }
+    int starLines() const { return (int) star.size(); }
+    float starGlow() const { return starFlash; }
 private:
     SolIntentProcessor& proc;
     float phase = 0.0f;
+
+    bool starMode = false;
+    struct StarLine { int step, note; float grow; };
+    std::vector<StarLine> star;          // lines drawn so far, in order
+    float starFlash = 0.0f;              // the white "back to the source" flash after the tenth line
+    float starIdle = 0.0f;               // seconds since the last new note
+    bool starComplete = false;
+    std::array<unsigned int, 128> seenHits {};
+    void addStarLine (int note);
+    void paintStar (juce::Graphics&, juce::Point<float> centre, float radius);
 
     // breathing: holding a note breathes light in towards the centre; letting go breathes it out
     struct Speck { float angle, radius, speed, life, maxLife, size; juce::Colour col; bool inward; };
@@ -271,6 +288,7 @@ public:
     explicit SolIntentEditor (SolIntentProcessor&);
     ~SolIntentEditor() override;
     void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;   // five clicks on the logo: the hidden star mode
     void paintOverChildren (juce::Graphics&) override;
     void resized() override;
 
@@ -309,7 +327,9 @@ private:
                      octDown { "-" }, octUp { "+" };
     juce::ListBox browser { "Instruments", this };
     std::array<std::unique_ptr<LayerCard>, SolIntentProcessor::numLayers> cards;
+public:
     ResonanceView resonance { proc };
+private:
     PadGrid pads { proc };
     MapView mapView { proc };
     FxView fxView { proc };
@@ -342,6 +362,9 @@ private:
     juce::Rectangle<int> knobArea, leftArea, centreArea, browserArea;
     juce::Rectangle<int> sectionEnv, sectionMotion, sectionSound, sectionMacros;
     juce::Image starField;   // painted once per size
+    juce::Rectangle<float> logoArea;
+    int logoClicks = 0;
+    double lastLogoClick = 0.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SolIntentEditor)
 };

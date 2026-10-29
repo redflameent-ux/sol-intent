@@ -236,7 +236,11 @@ void SolIntentProcessor::handleMidi (juce::MidiBuffer& in, juce::MidiBuffer& out
             continue;
         }
 
-        if (m.isNoteOn()) lastNote = m.getNoteNumber();
+        if (m.isNoteOn())
+        {
+            lastNote = m.getNoteNumber();
+            noteHits[(size_t) m.getNoteNumber()].fetch_add (1, std::memory_order_relaxed);
+        }
         out.addEvent (m, meta.samplePosition);
     }
 }

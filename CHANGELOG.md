@@ -2,6 +2,9 @@
 
 Newest changes first. Every build is on the [Releases page](../../releases/tag/latest).
 
+## 0.14 (29 Oct 2026): Something hidden
+- There's a secret in the logo. Five is the magic number. ✶
+
 ## 0.13 (28 Oct 2026): Tibetan Bowls
 - The built-in demo bowl is now called **Tibetan Bowls (Chromatic)**. The sound hasn't changed, and projects that use it still find it.
 

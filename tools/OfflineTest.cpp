@@ -188,6 +188,63 @@ static int snapshot (const File& png)
         MessageManager::getInstance()->runDispatchLoopUntil (400);
         save (png.getSiblingFile ("ui_roll.png"));
     }
+
+    // the hidden star: five clicks on the logo, then notes draw the pentagram one line each
+    {
+        p.roll.stop();
+        p.roll.setPattern ({});
+        sol::Library::setSetting ("starMode", "0");
+        ed.reset();
+        ed.reset (p.createEditor());
+        MessageManager::getInstance()->runDispatchLoopUntil (100);
+        auto click = [&] (Point<float> at)
+        {
+            auto src = Desktop::getInstance().getMainMouseSource();
+            const auto now = Time::getCurrentTime();
+            MouseEvent e (src, at, ModifierKeys::leftButtonModifier, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                          ed.get(), ed.get(), now, at, now, 1, false);
+            ed->mouseDown (e);
+        };
+        for (int i = 0; i < 5; ++i) click ({ 60.0f, 40.0f });
+        std::cout << "star mode after five logo clicks: " << sol::Library::getSetting ("starMode") << "\n";
+
+        auto runFor = [&] (double seconds)
+        {
+            const int frames = (int) (seconds * 30.0);
+            for (int f = 0; f < frames; ++f)
+            {
+                for (int b = 0; b < 3; ++b) { p.processBlock (out, m); m.clear(); }
+                MessageManager::getInstance()->runDispatchLoopUntil (33);
+            }
+        };
+        p.selectInstrument (0, 0);
+        for (int i = 0; i < 200 && p.isLoading(); ++i) Thread::sleep (10);
+        const int melody[] = { 48, 55, 60, 62, 64, 67, 69, 72, 74, 76 };   // a pentatonic climb
+        for (int i = 0; i < 7; ++i)
+        {
+            p.keyboardState.noteOn (1, melody[i], 0.8f);
+            runFor (0.35);
+            p.keyboardState.noteOff (1, melody[i], 0.0f);
+            runFor (0.15);
+        }
+        runFor (0.5);
+        save (png.getSiblingFile ("ui_star_half.png"));
+        for (int i = 7; i < 10; ++i)
+        {
+            p.keyboardState.noteOn (1, melody[i], 0.8f);
+            runFor (0.35);
+            p.keyboardState.noteOff (1, melody[i], 0.0f);
+            runFor (0.15);
+        }
+        runFor (0.55);
+        if (auto* se = dynamic_cast<SolIntentEditor*> (ed.get()))
+            std::cout << "star lines " << se->resonance.starLines() << " flash " << se->resonance.starGlow() << "\n";
+        save (png.getSiblingFile ("ui_star_full.png"));
+        runFor (0.6);
+        save (png.getSiblingFile ("ui_star_flash.png"));
+        for (int i = 0; i < 5; ++i) click ({ 60.0f, 40.0f });
+        std::cout << "star mode after five more clicks: " << sol::Library::getSetting ("starMode") << "\n";
+    }
     return 0;
 }
 
