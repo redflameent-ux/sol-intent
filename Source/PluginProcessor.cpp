@@ -1,7 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-static constexpr int voicesPerLayer = 64;   // bowls and drums ring a long time, so plenty of voices
 static constexpr int chunk = 32;           // modulation updates every 32 samples
 
 SolIntentProcessor::SolIntentProcessor()
@@ -446,13 +445,26 @@ void SolIntentProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::M
 
     // for the ripple display and the pads: how loud each note is still ringing
     float glow[128] = {};
-    for (auto& l : layers)
-        for (int v = 0; v < l.synth.getNumVoices(); ++v)
-            if (auto* voice = dynamic_cast<sol::SamplerVoice*> (l.synth.getVoice (v)); voice != nullptr && voice->isVoiceActive())
+    for (int li = 0; li < numLayers; ++li)
+    {
+        auto& l = layers[(size_t) li];
+        const float layerGain = on[li] ? 0.5f * (l.gainL + l.gainR) : 0.0f;
+        for (int v = 0; v < l.synth.getNumVoices() && v < voicesPerLayer; ++v)
+        {
+            auto* voice = static_cast<sol::SamplerVoice*> (l.synth.getVoice (v));   // every voice we add is one of ours
+            auto& view = voiceViews[(size_t) (li * voicesPerLayer + v)];
+            const float hz = voice->getSoundingHz();
+            view.hz.store (hz, std::memory_order_relaxed);
+            view.level.store (hz > 0.0f ? voice->getOutputLevel() * layerGain : 0.0f, std::memory_order_relaxed);
+            view.velocity.store (voice->getVelocity(), std::memory_order_relaxed);
+            view.serial.store (voice->getNoteSerial(), std::memory_order_relaxed);
+            if (voice->isVoiceActive())
             {
                 auto note = voice->getCurrentlyPlayingNote();
                 if (note >= 0 && note < 128) glow[note] = juce::jmax (glow[note], voice->getLevel());
             }
+        }
+    }
     for (int k = 0; k < 128; ++k)
         noteGlow[(size_t) k] = glow[k];
 }

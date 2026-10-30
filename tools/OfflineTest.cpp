@@ -242,6 +242,82 @@ static int snapshot (const File& png)
         save (png.getSiblingFile ("ui_star_full.png"));
         runFor (0.6);
         save (png.getSiblingFile ("ui_star_flash.png"));
+        // the star moving with the music: a low note, a high note, a chord, and a bend
+        auto* se = dynamic_cast<SolIntentEditor*> (ed.get());
+        auto& rv = se->resonance;
+        auto starShot = [&] (const char* name)
+        {
+            auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            auto crop = img.getClippedImage (rv.getBoundsInParent());
+            auto f = png.getSiblingFile (name);
+            f.deleteFile();
+            FileOutputStream os (f);
+            PNGImageFormat().writeImageToStream (crop, os);
+        };
+        runFor (4.5);   // let the closed star finish its flash and clear
+        p.keyboardState.noteOn (1, 36, 0.9f);   // C2: broad, slow
+        runFor (1.2);
+        starShot ("ui_star_low.png");
+        p.keyboardState.noteOff (1, 36, 0.0f);
+        p.stopAllSound(); runFor (1.0);
+        p.keyboardState.noteOn (1, 84, 0.9f);   // C6: fine, quick
+        runFor (1.2);
+        starShot ("ui_star_high.png");
+        p.keyboardState.noteOff (1, 84, 0.0f);
+        p.stopAllSound(); runFor (1.0);
+        for (int n : { 48, 55, 64, 72 }) p.keyboardState.noteOn (1, n, 0.85f);   // a chord: the motions add up
+        runFor (1.5);
+        starShot ("ui_star_chord.png");
+
+        // how long one frame of the star takes to draw with a busy chord
+        {
+            Image frame (Image::ARGB, rv.getWidth(), rv.getHeight(), true);
+            const double t0 = Time::getMillisecondCounterHiRes();
+            for (int i = 0; i < 20; ++i) { Graphics g (frame); rv.paintEntireComponent (g, false); }
+            std::cout << "star frame with a 4-note chord: " << String ((Time::getMillisecondCounterHiRes() - t0) / 20.0, 2) << " ms\n";
+        }
+        for (int n : { 48, 55, 64, 72 }) p.keyboardState.noteOff (1, n, 0.0f);
+        p.stopAllSound(); runFor (1.0);
+
+        // a short film of it, frame by frame, if asked for
+        if (auto* dir = std::getenv ("SOL_FRAMES"))
+        {
+            File out_ (dir);
+            out_.createDirectory();
+            int frameNo = 0;
+            auto film = [&] (double seconds)
+            {
+                const int frames = (int) (seconds * 30.0);
+                for (int f = 0; f < frames; ++f)
+                {
+                    for (int b = 0; b < 3; ++b) { p.processBlock (out, m); m.clear(); }
+                    MessageManager::getInstance()->runDispatchLoopUntil (33);
+                    auto img = ed->createComponentSnapshot (rv.getBoundsInParent(), true, 1.0f);
+                    auto ff = out_.getChildFile (String::formatted ("f%04d.png", frameNo++));
+                    FileOutputStream os (ff);
+                    PNGImageFormat().writeImageToStream (img, os);
+                }
+            };
+            const int tune[] = { 48, 55, 60, 64, 67, 72, 76, 79, 84, 88 };
+            for (int i = 0; i < 10; ++i)   // a climbing melody draws the star and moves it
+            {
+                p.keyboardState.noteOn (1, tune[i], 0.75f + 0.02f * (float) i);
+                film (0.55);
+                p.keyboardState.noteOff (1, tune[i], 0.0f);
+            }
+            film (1.5);
+            for (int n : { 36, 43, 52, 60 }) p.keyboardState.noteOn (1, n, 0.9f);   // a low chord
+            film (2.5);
+            for (int n : { 36, 43, 52, 60 }) p.keyboardState.noteOff (1, n, 0.0f);
+            p.keyboardState.noteOn (1, 60, 0.9f);   // a bend from C4 up an octave and back
+            for (int k = 0; k <= 40; ++k) { m.addEvent (MidiMessage::pitchWheel (1, 8192 + (int) (8191.0 * std::sin (MathConstants<double>::pi * k / 40.0) * (k <= 40 ? 1 : 0) * 0.999)), 0); film (0.05); }
+            film (2.5);
+            p.keyboardState.noteOff (1, 60, 0.0f);
+            m.addEvent (MidiMessage::pitchWheel (1, 8192), 0);
+            film (3.0);
+            std::cout << "film: " << frameNo << " frames\n";
+        }
+
         for (int i = 0; i < 5; ++i) click ({ 60.0f, 40.0f });
         std::cout << "star mode after five more clicks: " << sol::Library::getSetting ("starMode") << "\n";
     }
@@ -1298,6 +1374,94 @@ int main (int argc, char** argv)
         CHECK (high < low * 0.03f, "a 30 kHz tone in a 96 kHz file doesn't fold back into the audible range ("
                + String (Decibels::gainToDecibels (high / low), 1) + " dB)");
         CHECK (low > 0.2f, "while a 1 kHz tone in the same kind of file plays at full level (" + String (low, 3) + ")");
+    }
+
+    std::cout << "Star display: the real pitch of every voice\n";
+    {
+        auto sounding = [&p]
+        {
+            std::vector<std::pair<float, float>> v;   // hz, velocity
+            for (auto& vv : p.voiceViews)
+                if (vv.hz.load() > 0.0f) v.push_back ({ vv.hz.load(), vv.velocity.load() });
+            std::sort (v.begin(), v.end());
+            return v;
+        };
+        auto levelOfFirst = [&p]
+        {
+            for (auto& vv : p.voiceViews) if (vv.hz.load() > 0.0f) return vv.level.load();
+            return 0.0f;
+        };
+        p.stopAllSound(); render (p, out, m, 2, bs);
+        p.loadNow (0, p.getInstrumentList()[0]);   // the built-in bowls, tuned to A = 440
+        for (auto id : { "bOn", "cOn", "dOn", "morphOn" }) p.params.getParameter (id)->setValueNotifyingHost (0.0f);
+        p.params.getParameter ("aRing")->setValueNotifyingHost (1.0f);
+        render (p, out, m, 4, bs);
+
+        m.addEvent (MidiMessage::noteOn (1, 62, (uint8) 100), 37);   // D4: two keys above its C4 recording
+        render (p, out, m, 4, bs);
+        auto s1 = sounding();
+        CHECK (s1.size() == 1 && std::abs (s1[0].first - 293.66f) < 0.2f,
+               "a transposed key reports the pitch it really sounds (" + String (s1.empty() ? 0.0f : s1[0].first, 2) + " Hz, D4 = 293.66)");
+        CHECK (! s1.empty() && std::abs (s1[0].second - 100.0f / 127.0f) < 0.01f, "and its velocity");
+
+        m.addEvent (MidiMessage::pitchWheel (1, 16383), 0);
+        render (p, out, m, 20, bs);
+        auto s2 = sounding();
+        CHECK (s2.size() == 1 && std::abs (s2[0].first - 587.33f) < 1.0f,
+               "pitch bend is included (" + String (s2.empty() ? 0.0f : s2[0].first, 1) + " Hz with +12 st of bend)");
+        m.addEvent (MidiMessage::pitchWheel (1, 8192), 0);
+        render (p, out, m, 20, bs);
+
+        const float held = levelOfFirst();
+        m.addEvent (MidiMessage::noteOff (1, 62), 0);
+        render (p, out, m, 40, bs);
+        const float tail1 = levelOfFirst();
+        render (p, out, m, 200, bs);
+        const float tail2 = levelOfFirst();
+        CHECK (held > 0.0f && tail1 > 0.0f && tail2 > 0.0f && tail2 < tail1,
+               "after the key is let go the level follows the ringing tail down (" + String (held, 4) + " > " + String (tail1, 4) + " > " + String (tail2, 4) + ")");
+        p.stopAllSound(); render (p, out, m, 4, bs);
+        CHECK (sounding().empty(), "and nothing is reported once the sound has stopped");
+
+        // a chord: every note is reported, the newest doesn't replace the others
+        for (int n : { 60, 64, 67 }) m.addEvent (MidiMessage::noteOn (1, n, (uint8) 90), 100);
+        render (p, out, m, 4, bs);
+        auto s3 = sounding();
+        CHECK (s3.size() == 3 && std::abs (s3[0].first - 261.63f) < 0.2f && std::abs (s3[1].first - 329.63f) < 0.2f && std::abs (s3[2].first - 392.0f) < 0.2f,
+               "a C major chord reports all three pitches (" + String ((int) s3.size()) + " voices)");
+        p.params.getParameter ("tune")->setValueNotifyingHost (p.params.getParameterRange ("tune").convertTo0to1 (1.0f));
+        render (p, out, m, 4, bs);
+        auto s4 = sounding();
+        CHECK (s4.size() == 3 && std::abs (s4[0].first - 277.18f) < 0.3f, "the Tune knob moves them too (C4 tuned up a semitone = "
+               + String (s4.empty() ? 0.0f : s4[0].first, 2) + " Hz)");
+        p.params.getParameter ("tune")->setValueNotifyingHost (p.params.getParameterRange ("tune").convertTo0to1 (0.0f));
+        p.stopAllSound(); render (p, out, m, 4, bs);
+
+        // an instrument recorded at A = 432: its A4 is 432 Hz, not 440
+        {
+            auto folder = root.getChildFile ("Crystal 432");
+            writeTone (folder.getChildFile ("A4.wav"), 432.0, 3.0);
+            sol::InstrumentSpec spec;
+            spec.name = "Crystal 432";
+            spec.tuning = 432.0f;
+            sol::ArticulationSpec art { "Main", {} };
+            sol::ZoneSpec z; z.file = "A4.wav"; z.root = 69;
+            art.zones.push_back (z);
+            spec.articulations.push_back (art);
+            sol::Library::writeSpec (folder, spec);
+            p.rescanLibrary();
+            p.loadNow (0, p.getInstrumentList()[(size_t) jmax (0, p.findInList (folder))]);
+            render (p, out, m, 4, bs);
+            m.addEvent (MidiMessage::noteOn (1, 69, (uint8) 100), 0);
+            m.addEvent (MidiMessage::noteOn (1, 72, (uint8) 100), 0);
+            render (p, out, m, 4, bs);
+            auto s5 = sounding();
+            CHECK (s5.size() == 2 && std::abs (s5[0].first - 432.0f) < 0.2f && std::abs (s5[1].first - 513.74f) < 0.3f,
+                   "a 432 Hz instrument reports its own tuning (A4 " + String (s5.empty() ? 0.0f : s5[0].first, 1) + " Hz, C5 "
+                   + String (s5.size() > 1 ? s5[1].first : 0.0f, 1) + " Hz)");
+            CHECK (sol::Library::describe ({ "Crystal 432", "", folder }).tuning == 432.0f, "and remembers it in its instrument file");
+            p.stopAllSound(); render (p, out, m, 4, bs);
+        }
     }
 
     std::cout << (failures == 0 ? "\nALL PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");

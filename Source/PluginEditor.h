@@ -72,9 +72,10 @@ private:
 class ResonanceView : public juce::Component
 {
 public:
-    explicit ResonanceView (SolIntentProcessor& p) : proc (p) {}
+    explicit ResonanceView (SolIntentProcessor& p);
     void paint (juce::Graphics&) override;
     void tick();
+    void tickIfStale();              // keeps it moving where there's no screen refresh to follow (e.g. off-screen)
     juce::String title, subtitle;
 
     // hidden star mode: each note draws the next line of a pentagram, in a ten-step path that
@@ -96,6 +97,19 @@ private:
     std::array<unsigned int, 128> seenHits {};
     void addStarLine (int note);
     void paintStar (juce::Graphics&, juce::Point<float> centre, float radius);
+
+    // ---- the star moves with the music ----
+    // one entry per voice: the real pitch it's sounding, how strongly it's moving the geometry, and its own
+    // wave phase (started at zero on each new note, so the same note always moves the same way)
+    struct Motion { unsigned int serial = 0; float midi = 60.0f, phase = 0.0f, intensity = 0.0f, peak = 0.0f, age = 0.0f; bool alive = false; };
+    std::array<Motion, (size_t) (SolIntentProcessor::numLayers * SolIntentProcessor::voicesPerLayer)> motion;
+    struct Wave { float midi, phase, age, strength; };
+    std::vector<Wave> waves;          // the voices moving the star this frame (strongest first)
+    std::vector<Motion> fading;       // notes whose voice was taken by a new note: they finish dying away on their own
+    juce::Point<float> warp (juce::Point<float> p, juce::Point<float> centre, float radius) const;
+    juce::Path warpedLine (juce::Point<float> a, juce::Point<float> b, float upTo, juce::Point<float> centre, float radius) const;
+    std::unique_ptr<juce::VBlankAttachment> vblank;   // redraws in step with the screen
+    double lastVBlank = 0.0;
 
     // breathing: holding a note breathes light in towards the centre; letting go breathes it out
     struct Speck { float angle, radius, speed, life, maxLife, size; juce::Colour col; bool inward; };
@@ -273,6 +287,8 @@ private:
     juce::ComboBox artBox;
     juce::TextButton addArt { "+ Articulation" }, renameArt { "Rename" }, deleteArt { "Delete" }, importButton { "Import files..." },
                      undoButton { "Undo" }, redoButton { "Redo" };
+    juce::ComboBox tuningBox;       // what A the instrument was tuned to (440, or 432 for many crystal bowls)
+    juce::Label tuningL;
     juce::ListBox zoneList { "Zones", this };
     juce::Slider root, lo, hi, velLo, velHi, gain;
     juce::Label rootL, loL, hiL, velLoL, velHiL, gainL;

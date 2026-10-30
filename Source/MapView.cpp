@@ -18,8 +18,26 @@ static void askTextBox (Component* from, const String& title, const String& init
     }), true);
 }
 
+static const float tuningChoices[] = { 440.0f, 432.0f, 442.0f, 444.0f };
+
 MapView::MapView (SolIntentProcessor& p) : proc (p)
 {
+    tuningL.setText ("Recorded at", dontSendNotification);
+    tuningL.setColour (Label::textColourId, ui::textDim);
+    tuningL.setFont (FontOptions (12.0f));
+    tuningL.setJustificationType (Justification::centredRight);
+    addAndMakeVisible (tuningL);
+    for (int i = 0; i < 4; ++i) tuningBox.addItem ("A = " + String ((int) tuningChoices[i]) + " Hz", i + 1);
+    tuningBox.setTooltip ("The tuning this instrument was recorded in - many crystal bowls are made for A = 432 Hz.\n"
+                          "It doesn't change the sound; it tells the display the true pitch of every note.");
+    tuningBox.onChange = [this]
+    {
+        if (updating) return;
+        const int i = tuningBox.getSelectedItemIndex();
+        if (i >= 0 && i < 4 && spec.tuning != tuningChoices[i]) { spec.tuning = tuningChoices[i]; changed(); }
+    };
+    addAndMakeVisible (tuningBox);
+
     addAndMakeVisible (artBox);
     artBox.onChange = [this]
     {
@@ -455,6 +473,13 @@ void MapView::refreshControls()
     for (auto* c : std::initializer_list<Component*> { &artBox, &addArt, &importButton, &autoRanges })
         c->setEnabled (editable);
     renameArt.setEnabled (editable && a != nullptr);
+    tuningBox.setEnabled (editable);
+    {
+        int sel = -1;
+        for (int i = 0; i < 4; ++i) if (std::abs (spec.tuning - tuningChoices[i]) < 0.01f) sel = i;
+        if (sel >= 0) tuningBox.setSelectedItemIndex (sel, dontSendNotification);
+        else tuningBox.setText ("A = " + String (spec.tuning, 1) + " Hz", dontSendNotification);
+    }
     deleteArt.setEnabled (editable && spec.articulations.size() > 1);
 
     for (auto* c : std::initializer_list<Component*> { &root, &lo, &hi, &velLo, &velHi, &gain, &rootL, &loL, &hiL, &velLoL, &velHiL, &gainL })
@@ -745,9 +770,12 @@ void MapView::paint (Graphics& g)
 
     g.setColour (ui::textDim);
     g.setFont (FontOptions (11.0f));
-    g.drawText (editable ? "Drag blocks to move them, drag their edges to resize. Saves automatically." : "",
-                getLocalBounds().removeFromBottom (32).withTrimmedRight (140).reduced (12, 0),
-                Justification::centredLeft);
+    {   // between the tuning box and Undo
+        auto hint = getLocalBounds().removeFromBottom (32).withTrimmedRight (140).reduced (0, 2);
+        hint.setLeft (tuningBox.getRight() + 10);
+        g.drawFittedText (editable ? "Drag blocks to move them, their edges to resize. Saves automatically." : "",
+                          hint, Justification::centredLeft, 2, 1.0f);
+    }
 }
 
 void MapView::resized()
@@ -768,6 +796,9 @@ void MapView::resized()
     redoButton.setBounds (footer.removeFromRight (56).withTrimmedTop (2));
     footer.removeFromRight (6);
     undoButton.setBounds (footer.removeFromRight (56).withTrimmedTop (2));
+    tuningL.setBounds (footer.removeFromLeft (76));
+    footer.removeFromLeft (4);
+    tuningBox.setBounds (footer.removeFromLeft (120).withTrimmedTop (2));
     r.removeFromBottom (4);
 
     auto buttons = r.removeFromBottom (28);

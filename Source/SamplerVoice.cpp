@@ -71,6 +71,9 @@ void SamplerVoice::startNote (int note, float velocity, juce::SynthesiserSound*,
     pos = 0.0;
     octave = 0;
     chokeDone = false;
+    outEnv = 0.0f;
+    noteVelocity = juce::jlimit (0.0f, 1.0f, velocity);
+    ++noteSerial;
     noteOffset = (float) (note - zone->rootNote);
     // Touch: 0% = every hit the same, 70% = a soft hit (velocity 64) about 10 dB down, 100% = about 15 dB down
     gain = zone->gain * std::pow (juce::jlimit (0.0f, 1.0f, velocity), 2.5f * settings.velSens);
@@ -242,6 +245,7 @@ void SamplerVoice::renderNextBlock (juce::AudioBuffer<float>& out, int start, in
 
     lastRatio = ratio;
     level = juce::jmax (peak, level * 0.9f);
+    outEnv = juce::jmax (peak, outEnv * std::exp (-(float) num / (0.08f * (float) getSampleRate())));
 }
 
 } // namespace sol

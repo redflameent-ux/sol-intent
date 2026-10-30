@@ -326,6 +326,7 @@ static ZoneSpec zoneFromVar (const juce::var& zv)
     z.velLo  = zv.hasProperty ("velLo")  ? (int) zv["velLo"]  : 0;
     z.velHi  = zv.hasProperty ("velHi")  ? (int) zv["velHi"]  : 127;
     z.gainDb = zv.hasProperty ("gainDb") ? (float) (double) zv["gainDb"] : 0.0f;
+    z.cents  = zv.hasProperty ("cents")  ? (float) (double) zv["cents"]  : 0.0f;
     return z;
 }
 
@@ -342,6 +343,7 @@ InstrumentSpec Library::describe (const InstrumentInfo& info)
         auto json = juce::JSON::parse (jsonFile);
         if (json.hasProperty ("name"))    spec.name = json["name"].toString();
         if (json.hasProperty ("letRing")) spec.letRing = (bool) json["letRing"];
+        if (json.hasProperty ("tuning"))  spec.tuning = juce::jlimit (400.0f, 480.0f, (float) (double) json["tuning"]);
 
         if (auto* arts = json["articulations"].getArray())
         {
@@ -378,6 +380,7 @@ bool Library::writeSpec (const juce::File& folder, const InstrumentSpec& spec)
     auto* root = new juce::DynamicObject();
     root->setProperty ("name", spec.name);
     root->setProperty ("letRing", spec.letRing);
+    root->setProperty ("tuning", spec.tuning);
     juce::Array<juce::var> arts;
     for (auto& a : spec.articulations)
     {
@@ -394,6 +397,7 @@ bool Library::writeSpec (const juce::File& folder, const InstrumentSpec& spec)
             zo->setProperty ("velLo", z.velLo);
             zo->setProperty ("velHi", z.velHi);
             zo->setProperty ("gainDb", z.gainDb);
+            if (z.cents != 0.0f) zo->setProperty ("cents", z.cents);
             zones.add (juce::var (zo));
         }
         ao->setProperty ("zones", zones);
@@ -489,6 +493,7 @@ InstrumentPtr Library::load (const InstrumentInfo& info, juce::AudioFormatManage
     inst->category = info.category;
     inst->folder = info.folder;
     inst->letRingDefault = spec.letRing;
+    inst->tuning = spec.tuning;
 
     for (auto& as : spec.articulations)
     {
@@ -507,6 +512,7 @@ InstrumentPtr Library::load (const InstrumentInfo& info, juce::AudioFormatManage
             z.loKey = zs.lo; z.hiKey = zs.hi;
             z.loVel = zs.velLo; z.hiVel = zs.velHi;
             z.gain = juce::Decibels::decibelsToGain (zs.gainDb);
+            z.rootHz = rootFrequency (zs.root, spec.tuning, zs.cents);
             art.zones.push_back (std::move (z));
         }
         art.lowestKey = 127; art.highestKey = 0;
@@ -543,6 +549,7 @@ InstrumentPtr Library::makeDemoBowl()
         z.fileName = "demo " + noteName (root);
         z.sampleRate = sr;
         z.rootNote = root;
+        z.rootHz = rootFrequency (root, 440.0f, 0.0f);   // the demo bowls are generated at A = 440
         z.audio.setSize (2, len);
         z.audio.clear();
 

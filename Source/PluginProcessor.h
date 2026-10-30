@@ -14,6 +14,18 @@ class SolIntentProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
     static constexpr int numLayers = 4;
+    static constexpr int voicesPerLayer = 64;   // bowls and drums ring a long time, so plenty of voices
+
+    // What every voice is sounding right now, for the star display. Written by the audio thread once
+    // per block (plain atomic stores - no locks, no allocation), read by the screen whenever it likes.
+    struct VoiceView
+    {
+        std::atomic<float> hz { 0.0f };          // real sounding pitch: tuning, key, Tune knobs and bend included
+        std::atomic<float> level { 0.0f };       // its actual output level, so it follows the recording's tail
+        std::atomic<float> velocity { 0.0f };
+        std::atomic<unsigned int> serial { 0 };  // changes when the voice starts a new note
+    };
+    std::array<VoiceView, (size_t) (numLayers * voicesPerLayer)> voiceViews;
     static juce::String layerLetter (int i) { return juce::String::charToString ((juce::juce_wchar) ('A' + i)); }
     static juce::String layerParam (int i, const char* what) { return juce::String::charToString ((juce::juce_wchar) ('a' + i)) + what; }
 

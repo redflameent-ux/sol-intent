@@ -43,6 +43,17 @@ public:
     using juce::SynthesiserVoice::renderNextBlock;
 
     float getLevel() const noexcept { return level; }
+
+    // what this voice is really sounding, for the display: the recording's own pitch (its instrument's
+    // tuning, e.g. A = 432) moved by the key, the Tune knobs and the pitch bend. 0 when silent.
+    float getSoundingHz() const noexcept
+    {
+        if (zone == nullptr) return 0.0f;
+        return zone->rootHz * std::exp2 ((noteOffset + settings.tuneSemis + bendNow * bendRange) / 12.0f);
+    }
+    float getVelocity() const noexcept    { return zone != nullptr ? noteVelocity : 0.0f; }
+    float getOutputLevel() const noexcept { return zone != nullptr ? outEnv : 0.0f; }   // follows the real output, tail included
+    unsigned int getNoteSerial() const noexcept { return noteSerial; }   // changes every time a new note starts
     void choke();                  // fade this hit out quickly - the same key was struck again
 
 private:
@@ -61,6 +72,9 @@ private:
     bool  released = false;        // key let go while "let ring" was on
     juce::ADSR env;
     float level = 0.0f;            // for the display
+    float outEnv = 0.0f;           // smoothed output level (fast rise, ~80 ms fall), for the star display
+    float noteVelocity = 0.0f;
+    unsigned int noteSerial = 0;
     int   octave = 0;              // which filtered copy is being read (0 = the original)
     int   chokeLeft = 0, chokeLen = 1;
     bool  chokeDone = false;

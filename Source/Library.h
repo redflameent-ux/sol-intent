@@ -33,6 +33,7 @@ struct ZoneSpec
     int lo = -1, hi = -1;       // -1 = work it out from the neighbouring roots
     int velLo = 0, velHi = 127;
     float gainDb = 0.0f;
+    float cents = 0.0f;         // fine tuning of this one recording, if it's a little sharp or flat
 };
 
 struct ArticulationSpec
@@ -45,8 +46,15 @@ struct InstrumentSpec
 {
     juce::String name;
     bool letRing = true;
+    float tuning = 440.0f;      // the A the instrument was tuned to: 440, or 432 for many crystal bowls
     std::vector<ArticulationSpec> articulations;
 };
+
+// the real pitch of a recording at its root key, in Hz
+inline float rootFrequency (int rootNote, float tuningA4, float cents)
+{
+    return tuningA4 * std::pow (2.0f, ((float) (rootNote - 69) + cents / 100.0f) / 12.0f);
+}
 
 // ---- loaded, playable
 struct Zone
@@ -58,6 +66,7 @@ struct Zone
     std::vector<juce::AudioBuffer<float>> octaves;
     double sampleRate = 44100.0;
     void buildOctaves();
+    float rootHz = 261.63f;             // what the recording really sounds at its root key (tuning included)
     int rootNote = 60, loKey = 60, hiKey = 60, loVel = 0, hiVel = 127;
     float gain = 1.0f;
 };
@@ -78,6 +87,7 @@ struct Instrument
     juce::File folder;                  // empty for the built-in demo
     std::vector<Articulation> articulations;
     bool letRingDefault = true;
+    float tuning = 440.0f;
 
     const Articulation* get (int index) const;   // clamped; nullptr if none
     int numArticulations() const { return (int) articulations.size(); }

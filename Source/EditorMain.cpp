@@ -839,7 +839,7 @@ void SolIntentEditor::timerCallback()
     }
     else
     {
-        resonance.tick();
+        resonance.tickIfStale();   // normally it follows the screen's refresh by itself
         pads.repaint();
     }
 }

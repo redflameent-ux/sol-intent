@@ -380,12 +380,80 @@ static Colour fifthsColour (int n)
                        : ui::gold.interpolatedWith (ui::violet, (hue - 0.64f) / 0.36f);
 }
 
+ResonanceView::ResonanceView (SolIntentProcessor& p) : proc (p)
+{
+    waves.reserve (motion.size() + 64);
+    fading.reserve (64);
+    vblank = std::make_unique<VBlankAttachment> (this, [this]
+    {
+        lastVBlank = Time::getMillisecondCounterHiRes();
+        tick();
+    });
+}
+
+void ResonanceView::tickIfStale()
+{
+    if (Time::getMillisecondCounterHiRes() - lastVBlank > 150.0)
+        tick();
+}
+
+// How a pitch moves the star. Everything here comes from the pitch alone, so a note always moves it the
+// same way. Real frequencies (65 Hz - 4 kHz) are far too fast to see, so they're mapped onto slow visual
+// rates instead: a low C2 drifts about once every 8 seconds, middle C about 4 times a minute faster, C7 ~2x a second.
+static float visualRate (float midi)   { return jlimit (0.05f, 2.6f, 0.22f * std::exp2 ((midi - 48.0f) / 15.0f)); }
+
 void ResonanceView::tick()
 {
     const double now = Time::getMillisecondCounterHiRes() * 0.001;
     const float dt = lastTick > 0.0 ? (float) jlimit (0.0, 0.1, now - lastTick) : 1.0f / 30.0f;
     lastTick = now;
-    phase += 0.035f;
+    phase += 0.035f * dt * 30.0f;   // same pace at any refresh rate
+
+    // ---- follow every voice: real pitch, strength and its own wave phase ----
+    waves.clear();
+    const float attack = 1.0f - std::exp (-dt / 0.035f), release = 1.0f - std::exp (-dt / 0.12f);
+    for (size_t i = 0; i < motion.size(); ++i)
+    {
+        auto& view = proc.voiceViews[i];
+        auto& m = motion[i];
+        const float hz = view.hz.load (std::memory_order_relaxed);
+        const float lvl = view.level.load (std::memory_order_relaxed);
+        const unsigned int serial = view.serial.load (std::memory_order_relaxed);
+        float target = 0.0f;
+        if (hz > 1.0f && lvl > 1.0e-6f)
+        {
+            if (serial != m.serial || ! m.alive)
+            {
+                if (m.alive && m.intensity > 0.01f && fading.size() < 64) fading.push_back (m);   // let the old note fade out
+                m = { serial, 0.0f, 0.0f, 0.0f, lvl, 0.0f, true };   // a new note: its wave starts from zero
+            }
+            m.midi = 69.0f + 12.0f * std::log2 (hz / 440.0f);   // the true sounding pitch (432 Hz bowls sit a little below the key)
+            m.peak = jmax (m.peak, lvl);
+            // velocity sets how hard it moves; the real output level (relative to this note's own peak)
+            // carries it through the attack, the release and the recording's tail
+            target = std::sqrt (view.velocity.load (std::memory_order_relaxed)) * std::pow (lvl / m.peak, 0.6f);
+        }
+        if (! m.alive) continue;
+        m.intensity += (target - m.intensity) * (target > m.intensity ? attack : release);
+        m.phase += MathConstants<float>::twoPi * visualRate (m.midi) * dt;
+        m.age += dt;
+        if (target <= 0.0f && m.intensity < 0.002f) { m.alive = false; m.intensity = 0.0f; continue; }
+        waves.push_back ({ m.midi, m.phase, m.age, m.intensity });
+    }
+    for (auto& m : fading)
+    {
+        m.intensity -= m.intensity * release;
+        m.phase += MathConstants<float>::twoPi * visualRate (m.midi) * dt;
+        m.age += dt;
+        waves.push_back ({ m.midi, m.phase, m.age, m.intensity });
+    }
+    fading.erase (std::remove_if (fading.begin(), fading.end(), [] (const Motion& m) { return m.intensity < 0.002f; }), fading.end());
+
+    if (waves.size() > 24)   // a big chord: the 24 strongest are plenty (and keeps drawing quick)
+    {
+        std::partial_sort (waves.begin(), waves.begin() + 24, waves.end(), [] (const Wave& a, const Wave& b) { return a.strength > b.strength; });
+        waves.resize (24);
+    }
 
     // every new note draws the next line of the star (counted, so even the shortest hit is caught)
     for (int n = 0; n < 128; ++n)
@@ -464,7 +532,7 @@ void ResonanceView::tick()
                   { return s.life > s.maxLife || (s.inward && s.radius < 0.06f) || (! s.inward && s.radius > 1.35f); }), specks.end());
     for (auto& e : exhales) e.age += dt;
     exhales.erase (std::remove_if (exhales.begin(), exhales.end(), [] (const Exhale& e) { return e.age > e.duration; }), exhales.end());
-    repaint();
+    if (isShowing() || ! isVisible()) repaint();
 }
 
 // ---------------------------------------------------------------------------- hidden star mode
@@ -495,6 +563,71 @@ void ResonanceView::addStarLine (int note)
     star.push_back ({ (int) star.size(), note, 0.0f });
 }
 
+// One note's push on a point of the star. Each pitch has its own character:
+//  - where it points: its place on the circle of fifths
+//  - its symmetry (2-5 lobes): also from the circle of fifths, so neighbouring notes differ
+//  - how tightly its ripples are spaced: low notes broad and gentle, high notes fine and busy
+//  - how far it moves things: low notes swing wide, high notes shimmer in close
+// A wave flows outward from the centre (its phase keeps moving), the shape breathes in and out, and on
+// the attack the movement spreads from the middle to the edge like a ripple on water.
+static Point<float> notePush (int note, float rr, float theta, float wavePhase, float age, float strength, float R)
+{
+    const int fifth = ((note % 12 + 12) % 12) * 7 % 12;
+    const float theta0 = MathConstants<float>::twoPi * (float) fifth / 12.0f;
+    const float lobes = (float) (2 + fifth % 4);
+    const float t = jlimit (0.0f, 1.0f, (float) (note - 24) / 72.0f);   // 0 = low, 1 = high
+    const float k = 0.7f + 3.4f * t;                                     // ripples across the radius
+    const float amp = R * (0.065f - 0.034f * t) * strength;
+    const float spin = (fifth % 2 == 0 ? 1.0f : -1.0f) * 0.25f;           // half the notes turn one way, half the other
+
+    const float front = age * (1.1f + 1.4f * (1.0f - t));                // the onset spreading out from the centre
+    const float gate = jlimit (0.0f, 1.0f, (front - rr) / 0.35f + 1.0f);
+    if (gate <= 0.0f) return {};
+
+    const float travel = MathConstants<float>::twoPi * k * rr - wavePhase;
+    const float angular = lobes * (theta - theta0) + spin * wavePhase;
+    const float radial = std::sin (travel) * std::cos (angular)
+                       + 0.35f * std::sin (0.5f * wavePhase + (float) fifth) * rr;   // breathing: expand, contract
+    const float swirl = 0.4f * std::cos (travel) * std::sin (angular);
+    const float d = amp * gate * jmin (1.0f, rr * 6.0f);                 // the very centre stays put
+    return { d * (radial * std::sin (theta) + swirl * std::cos (theta)),
+             d * (-radial * std::cos (theta) + swirl * std::sin (theta)) };
+}
+
+Point<float> ResonanceView::warp (Point<float> p, Point<float> c, float R) const
+{
+    if (waves.empty()) return p;
+    const auto rel = p - c;
+    const float rr = rel.getDistanceFromOrigin() / R;
+    const float theta = std::atan2 (rel.x, -rel.y);   // clockwise from the top, like the rest of the display
+    Point<float> d;
+    for (auto& w : waves)
+    {
+        // a bent note sits between two keys: blend their characters so bends glide instead of jumping
+        const float lo = std::floor (w.midi), f = w.midi - lo;
+        d += notePush ((int) lo, rr, theta, w.phase, w.age, w.strength * (1.0f - f), R);
+        if (f > 0.001f) d += notePush ((int) lo + 1, rr, theta, w.phase, w.age, w.strength * f, R);
+    }
+    // a big chord adds up, but the star keeps its shape: soften anything beyond ~14% of the radius
+    const float len = d.getDistanceFromOrigin(), lim = R * 0.14f;
+    if (len > 1.0e-4f) d *= lim * std::tanh (len / lim) / len;
+    return p + d;
+}
+
+Path ResonanceView::warpedLine (Point<float> a, Point<float> b, float upTo, Point<float> c, float R) const
+{
+    Path path;
+    const int segs = waves.empty() ? 1 : 40;
+    const int last = jmax (1, (int) std::ceil (segs * upTo));
+    for (int i = 0; i <= last; ++i)
+    {
+        const float t = jmin (upTo, (float) i / (float) segs);
+        const auto pt = warp (a + (b - a) * t, c, R);
+        if (i == 0) path.startNewSubPath (pt); else path.lineTo (pt);
+    }
+    return path;
+}
+
 void ResonanceView::paintStar (Graphics& g, Point<float> c, float R)
 {
     const float r = R * 0.86f;
@@ -502,10 +635,18 @@ void ResonanceView::paintStar (Graphics& g, Point<float> c, float R)
     for (int i = 0; i < 5; ++i) v[i] = c.getPointOnCircumference (r, MathConstants<float>::twoPi * (float) i / 5.0f);
 
     // the outer circle and a faint outline of the whole star, so its shape is always hinted at
-    g.setColour (ui::goldDim.withAlpha (0.55f));
-    g.drawEllipse (Rectangle<float> (R * 2, R * 2).withCentre (c), 1.0f);
+    {
+        Path ring;
+        for (int i = 0; i <= 120; ++i)
+        {
+            const auto pt = warp (c.getPointOnCircumference (R, MathConstants<float>::twoPi * (float) i / 120.0f), c, R);
+            if (i == 0) ring.startNewSubPath (pt); else ring.lineTo (pt);
+        }
+        g.setColour (ui::goldDim.withAlpha (0.55f));
+        g.strokePath (ring, PathStrokeType (1.0f));
+    }
     g.setColour (ui::goldDim.withAlpha (0.18f));
-    for (auto& p : starPath) g.drawLine ({ v[p[0]], v[p[1]] }, 0.8f);
+    for (auto& p : starPath) g.strokePath (warpedLine (v[p[0]], v[p[1]], 1.0f, c, R), PathStrokeType (0.8f));
 
     const float idleFade = star.empty() ? 1.0f : jlimit (0.0f, 1.0f, 1.0f - (starIdle - 10.0f) / 4.0f);
     const float flash = starFlash;
@@ -514,16 +655,18 @@ void ResonanceView::paintStar (Graphics& g, Point<float> c, float R)
     for (auto& l : star)
     {
         const auto a = v[starPath[l.step][0]], b = v[starPath[l.step][1]];
-        const auto end = a + (b - a) * l.grow;
+        const auto line = warpedLine (a, b, l.grow, c, R);
+        const auto end = warp (a + (b - a) * l.grow, c, R);
         const float ring = jlimit (0.0f, 1.0f, std::sqrt (proc.noteGlow[(size_t) l.note].load() * 3.0f));
         auto col = starColour (l.step).interpolatedWith (Colours::white, flash * 0.85f);
         const float alpha = idleFade * (0.45f + 0.55f * jmax (ring, flash)) * shimmer;
+        const PathStrokeType::JointStyle js = PathStrokeType::curved;
         g.setColour (col.withAlpha (0.12f * alpha));
-        g.drawLine ({ a, end }, 10.0f + 6.0f * ring);
+        g.strokePath (line, PathStrokeType (10.0f + 6.0f * ring, js, PathStrokeType::rounded));
         g.setColour (col.withAlpha (0.30f * alpha));
-        g.drawLine ({ a, end }, 4.5f + 2.0f * ring);
+        g.strokePath (line, PathStrokeType (4.5f + 2.0f * ring, js, PathStrokeType::rounded));
         g.setColour (col.brighter (0.4f).withAlpha (alpha));
-        g.drawLine ({ a, end }, 1.6f);
+        g.strokePath (line, PathStrokeType (1.6f, js, PathStrokeType::rounded));
         if (l.grow < 1.0f)   // the light travelling along the line
         {
             g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.95f * idleFade), end.x, end.y,
@@ -532,7 +675,7 @@ void ResonanceView::paintStar (Graphics& g, Point<float> c, float R)
         }
     }
 
-    // the five points: lit once a line has reached them
+    // the five points: lit once a line has reached them (they move with the music too)
     for (int i = 0; i < 5; ++i)
     {
         float lit = 0.0f;
@@ -542,10 +685,11 @@ void ResonanceView::paintStar (Graphics& g, Point<float> c, float R)
         if (i == 0 && star.size() >= 7 && star[6].grow >= 1.0f) col = Colours::white;   // half way: back at the top
         col = col.interpolatedWith (Colours::white, flash);
         const float sz = 6.0f + 4.0f * lit + 10.0f * flash;
+        const auto pt = warp (v[i], c, R);
         g.setColour (col.withAlpha ((0.12f + 0.25f * lit + 0.4f * flash) * idleFade));
-        g.fillEllipse (Rectangle<float> (sz * 2.2f, sz * 2.2f).withCentre (v[i]));
+        g.fillEllipse (Rectangle<float> (sz * 2.2f, sz * 2.2f).withCentre (pt));
         g.setColour (col.withAlpha ((0.45f + 0.55f * jmax (lit, flash)) * idleFade));
-        g.fillEllipse (Rectangle<float> (sz * 0.7f, sz * 0.7f).withCentre (v[i]));
+        g.fillEllipse (Rectangle<float> (sz * 0.7f, sz * 0.7f).withCentre (pt));
     }
 
     // the white flash when the star closes: light fills it from the centre and spreads past the ring

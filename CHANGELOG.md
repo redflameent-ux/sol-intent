@@ -2,6 +2,12 @@
 
 Newest changes first. Every build is on the [Releases page](../../releases/tag/latest).
 
+## 0.15 (29 Oct 2026): The secret moves with the music
+- The hidden mode now follows the actual notes being played, not just how loud things are. Each note sends its own wave through the geometry: low notes bend it in broad, slow curves, high notes in fine, quick ripples. Chords combine their motions, velocity sets how strongly it moves, and the motion fades away with the sound's natural ring-out.
+- It follows the true pitch: transposed keys, the Tune knobs and pitch bend are all included. The same note always moves it the same way.
+- **New on the MAP page: "Recorded at A = 440 / 432 / 442 / 444 Hz".** Set this to the tuning an instrument was recorded in (many crystal bowls are made for A = 432). It doesn't change the sound; it tells the plugin each recording's true pitch.
+- The ring display now redraws in step with your screen, so its movement is smoother.
+
 ## 0.14 (29 Oct 2026): Something hidden
 - There's a secret in the logo. Five is the magic number. ✶
 
